@@ -67,3 +67,43 @@ CREATE TABLE IF NOT EXISTS shipping_alerts (
 );
 CREATE INDEX IF NOT EXISTS idx_alerts_order ON shipping_alerts(order_id);
 CREATE INDEX IF NOT EXISTS idx_alerts_created ON shipping_alerts(created_at DESC);
+
+-- ---------------- v3: auth, payments ledger, site settings ----------------
+
+-- PII columns (orders.customer_name/street/city/zip, shipping_alerts.body)
+-- hold AES-256-GCM ciphertext ("enc:v1:..."); see server/crypto.js.
+
+-- Admin sessions: only the sha256 of the cookie token is stored, so a DB
+-- leak doesn't hand out live sessions. Deleting a row revokes the session.
+CREATE TABLE IF NOT EXISTS admin_sessions (
+  token_hash TEXT PRIMARY KEY,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Failed admin logins, keyed by sha256(client IP). DB-backed because
+-- serverless instances don't share memory.
+CREATE TABLE IF NOT EXISTS login_failures (
+  id         BIGSERIAL PRIMARY KEY,
+  ip_hash    TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_login_failures_ip ON login_failures(ip_hash, created_at);
+
+-- Server-side payment ledger. An order must reference a succeeded, unused
+-- payment whose amount equals the server-computed total.
+CREATE TABLE IF NOT EXISTS payments (
+  id           TEXT PRIMARY KEY,
+  amount_cents INTEGER NOT NULL,
+  currency     TEXT NOT NULL DEFAULT 'usd',
+  status       TEXT NOT NULL,
+  order_id     TEXT REFERENCES orders(id) ON DELETE SET NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Editable storefront content/theme/pricing (see server/settings.js).
+CREATE TABLE IF NOT EXISTS site_settings (
+  key        TEXT PRIMARY KEY,
+  value      JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

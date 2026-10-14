@@ -11,6 +11,8 @@
   --accent-dark: #521a1a;
   --brass: #a67c3d;
   --sold: #8a8474;
+  --heading-font: Georgia, "Times New Roman", serif;
+  --body-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
 }
 
 * { box-sizing: border-box; }
@@ -19,7 +21,7 @@ body {
   margin: 0;
   background: var(--paper);
   color: var(--ink);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  font-family: var(--body-font);
   font-size: 15px;
   line-height: 1.55;
 }
@@ -36,14 +38,14 @@ body {
 }
 .shop-name {
   margin: 0;
-  font-family: Georgia, "Times New Roman", serif;
+  font-family: var(--heading-font);
   font-weight: 400;
   font-size: 44px;
   letter-spacing: 0.06em;
 }
 .tagline {
   margin: 6px 0 20px;
-  font-family: Georgia, "Times New Roman", serif;
+  font-family: var(--heading-font);
   font-style: italic;
   color: var(--ink-soft);
   font-size: 16px;
@@ -135,7 +137,7 @@ main { max-width: 960px; margin: 0 auto; padding: 28px 20px 60px; }
 }
 .card h3 {
   margin: 0;
-  font-family: Georgia, "Times New Roman", serif;
+  font-family: var(--heading-font);
   font-weight: 400; font-size: 20px;
 }
 .card-desc { margin: 0; font-size: 13.5px; color: var(--ink-soft); flex: 1; }
@@ -182,7 +184,7 @@ main { max-width: 960px; margin: 0 auto; padding: 28px 20px 60px; }
   border-top: 1px solid var(--rule); padding-top: 28px;
 }
 .about h2 {
-  font-family: Georgia, "Times New Roman", serif; font-weight: 400;
+  font-family: var(--heading-font); font-weight: 400;
   font-size: 24px; margin: 0 0 10px;
 }
 .about p { color: var(--ink-soft); font-size: 15px; }
@@ -206,7 +208,7 @@ footer { text-align: center; padding: 0 20px 40px; color: var(--ink-soft); font-
   padding: 16px 18px; border-bottom: 3px double var(--ink);
 }
 .drawer-head h2 {
-  margin: 0; font-family: Georgia, serif; font-weight: 400; font-size: 22px;
+  margin: 0; font-family: var(--heading-font); font-weight: 400; font-size: 22px;
 }
 .icon-btn {
   background: none; border: none; font-size: 26px; cursor: pointer;
@@ -227,7 +229,7 @@ footer { text-align: center; padding: 0 20px 40px; color: var(--ink-soft); font-
 .cart-thumb svg { height: 52px; }
 .cart-thumb img { max-height: 52px; max-width: 90%; object-fit: contain; }
 .cart-info { flex: 1; }
-.cart-info h4 { margin: 0 0 2px; font-family: Georgia, serif; font-weight: 400; font-size: 15px; }
+.cart-info h4 { margin: 0 0 2px; font-family: var(--heading-font); font-weight: 400; font-size: 15px; }
 .cart-info .unit { font-size: 12.5px; color: var(--ink-soft); }
 .qty-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
 .qty-row button {
@@ -242,7 +244,7 @@ footer { text-align: center; padding: 0 20px 40px; color: var(--ink-soft); font-
   font-size: 12px; color: var(--sold); text-decoration: underline;
 }
 .remove-link:hover { color: var(--accent); }
-.cart-empty { text-align: center; color: var(--ink-soft); padding: 40px 0; font-style: italic; font-family: Georgia, serif; }
+.cart-empty { text-align: center; color: var(--ink-soft); padding: 40px 0; font-style: italic; font-family: var(--heading-font); }
 .subtotal-row { display: flex; justify-content: space-between; font-size: 15px; margin-bottom: 12px; }
 .subtotal-row strong { font-size: 17px; }
 .primary-btn {
@@ -265,7 +267,7 @@ footer { text-align: center; padding: 0 20px 40px; color: var(--ink-soft); font-
 .modal.small { width: 380px; }
 .modal-body { padding: 18px; }
 .modal-body h3 {
-  font-family: Georgia, serif; font-weight: 400; font-size: 18px;
+  font-family: var(--heading-font); font-weight: 400; font-size: 18px;
   margin: 18px 0 8px; border-bottom: 1px solid var(--rule); padding-bottom: 6px;
 }
 .modal-body h3:first-child { margin-top: 0; }
@@ -292,7 +294,7 @@ footer { text-align: center; padding: 0 20px 40px; color: var(--ink-soft); font-
 .confirmation { text-align: center; padding: 24px 8px; }
 .confirmation h3 { border: none; font-size: 24px; }
 .confirmation .order-no {
-  font-family: Georgia, serif; font-size: 20px; color: var(--accent);
+  font-family: var(--heading-font); font-size: 20px; color: var(--accent);
   letter-spacing: 0.1em; margin: 10px 0;
 }
 .file-label input { margin-top: 8px; }
@@ -345,7 +347,7 @@ footer { text-align: center; padding: 0 20px 40px; color: var(--ink-soft); font-
 .hint { font-size: 12.5px; color: var(--ink-soft); margin: 6px 0 12px; }
 .hint strong { font-family: "Courier New", Courier, monospace; }
 .processing { text-align: center; padding: 48px 16px; }
-.processing p { font-family: Georgia, serif; font-style: italic; color: var(--ink-soft); }
+.processing p { font-family: var(--heading-font); font-style: italic; color: var(--ink-soft); }
 .spinner {
   width: 34px; height: 34px; margin: 0 auto 14px;
   border: 3px solid var(--rule); border-top-color: var(--accent);
@@ -360,3 +362,15 @@ footer { text-align: center; padding: 0 20px 40px; color: var(--ink-soft); font-
   .shop-name { font-size: 34px; }
   .row { flex-wrap: wrap; }
 }
+
+/* ---------- Announcement + admin settings ---------- */
+.announcement {
+  background: var(--accent); color: var(--paper);
+  text-align: center; padding: 8px 16px; font-size: 13px; letter-spacing: 0.04em;
+}
+.about p { white-space: pre-line; }
+.settings-group { border: 1px solid var(--rule); padding: 10px 14px 4px; margin: 0 0 14px; }
+.settings-group legend { padding: 0 6px; font-family: var(--heading-font); font-size: 16px; }
+.settings-group input[type="color"] { width: 56px; height: 32px; padding: 2px; }
+.settings-group label.color-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.settings-saved { color: var(--brass); font-style: italic; margin: 8px 0; }

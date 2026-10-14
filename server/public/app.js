@@ -1,7 +1,9 @@
 /* Dimitris Pens — shop frontend (API-backed).
  *
- * No localStorage for shop data: products, categories, inventory and orders
- * all live server-side in SQLite. The cart is intentionally in-memory only —
+ * No localStorage for shop data: products, categories, inventory, orders and
+ * site settings all live server-side in Postgres. Admin mode requires a
+ * server login (HttpOnly session cookie); the UI only shows admin controls,
+ * every admin API call is authorized server-side. The cart is in-memory only —
  * it does not survive a reload (documented tradeoff; a cookie-keyed
  * server cart would be the next step if that matters).
  */
@@ -15,6 +17,11 @@ async function api(method, path, body) {
     body: body === undefined ? undefined : JSON.stringify(body)
   });
   const data = await r.json().catch(() => ({}));
+  if (r.status === 401 && path !== "/admin/login" && admin) {
+    admin = false;
+    renderAll();
+    openLogin();
+  }
   if (!r.ok) {
     const err = new Error((data && data.error) || ("request failed: " + r.status));
     err.status = r.status;
@@ -61,8 +68,10 @@ var ICONS = {
   pencil:   { label: "Pencil · cedar",      style: "pencil",     accent: "#8a5a2b" }
 };
 
+const SAFE_IMAGE = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+=*$/;
 function artFor(p) {
-  if (p.image_data_url) return '<img src="' + p.image_data_url + '" alt="">';
+  if (p.image_data_url && SAFE_IMAGE.test(p.image_data_url))
+    return '<img src="' + esc(p.image_data_url) + '" alt="">';
   var ic = ICONS[p.image_key] || ICONS.classic;
   return penSVG(ic.style, ic.accent);
 }
@@ -71,16 +80,18 @@ function artFor(p) {
 let products = [];
 let categories = [];
 let cart = []; // [{id, qty}] — not persisted (see header note)
-let admin = localStorage.getItem("dp_admin") === "1" ||
-            new URLSearchParams(location.search).get("admin") === "1";
-let activeCat = "All";
+let admin = false; // set from GET /api/admin/session; server enforces it
+let settings = {};  // public site settings (GET /api/settings)
+let settingsMeta = { fields: [], fonts: {} };
+let activeCat = null; // null = all categories
 
 function prod(id) { return products.find((p) => p.id === id); }
 function money(cents) { return "$" + (cents / 100).toFixed(2); }
 function esc(s) {
   return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
+function txt(key) { return settings[key] == null ? "" : String(settings[key]); }
 
 async function refresh() {
   const [ps, cs] = await Promise.all([apiGet("/products"), apiGet("/categories")]);
@@ -93,20 +104,21 @@ async function refresh() {
 /* ---------------- shop grid ---------------- */
 function renderCats() {
   const nav = document.getElementById("categoryNav");
-  const cats = ["All"].concat(categories.map((c) => c.name));
+  const cats = [{ id: "", name: txt("all_label") || "All" }].concat(categories);
   nav.innerHTML = cats.map((c) =>
-    '<button data-cat="' + esc(c) + '"' + (c === activeCat ? ' class="active"' : "") + ">" + esc(c) + "</button>"
+    '<button data-cat="' + esc(c.id) + '"' + ((c.id || null) === activeCat ? ' class="active"' : "") + ">" + esc(c.name) + "</button>"
   ).join("");
   nav.querySelectorAll("button").forEach((b) => {
-    b.addEventListener("click", () => { activeCat = b.dataset.cat; renderCats(); renderGrid(); });
+    b.addEventListener("click", () => { activeCat = b.dataset.cat || null; renderCats(); renderGrid(); });
   });
 }
 
 function renderGrid() {
   const grid = document.getElementById("productGrid");
-  const list = products.filter((p) => activeCat === "All" || p.category_name === activeCat);
+  const list = products.filter((p) => !activeCat || p.category_id === activeCat);
+  document.getElementById("adminBar").hidden = !admin;
   if (!list.length) {
-    grid.innerHTML = '<p class="cart-empty">No pens in this category yet.</p>';
+    grid.innerHTML = '<p class="cart-empty">' + esc(txt("empty_category_text")) + "</p>";
     return;
   }
   grid.innerHTML = "";
@@ -114,19 +126,19 @@ function renderGrid() {
     const card = document.createElement("article");
     card.className = "card";
     const stockHtml = p.inventory <= 0
-      ? '<span class="soldout">Sold out</span>'
+      ? '<span class="soldout">' + esc(txt("sold_out_label")) + "</span>"
       : '<span class="stock-note' + (p.inventory <= 2 ? " low" : "") + '">' +
         (p.inventory <= 2 ? "Only " + p.inventory + " left" : p.inventory + " in stock") + "</span>";
     const actionHtml = p.inventory <= 0
-      ? '<span class="soldout">Sold out</span>'
-      : '<button class="add-btn" data-add="' + p.id + '">Add to Cart</button>';
+      ? '<span class="soldout">' + esc(txt("sold_out_label")) + "</span>"
+      : '<button class="add-btn" data-add="' + esc(p.id) + '">' + esc(txt("add_to_cart_label")) + "</button>";
     card.innerHTML =
       '<div class="card-img">' + artFor(p) + "</div>" +
       '<div class="card-body">' +
         '<span class="card-cat">' + esc(p.category_name) + "</span>" +
         "<h3>" + esc(p.name) + "</h3>" +
         '<p class="card-desc">' + esc(p.description || "") + "</p>" +
-        '<div class="card-row"><span class="price" data-price="' + p.id + '">' + money(p.price_cents) + "</span>" + stockHtml + "</div>" +
+        '<div class="card-row"><span class="price" data-price="' + esc(p.id) + '">' + money(p.price_cents) + "</span>" + stockHtml + "</div>" +
         '<div class="card-row">' + actionHtml + "</div>" +
       "</div>" +
       (admin ? adminControls(p) : "");
@@ -136,18 +148,18 @@ function renderGrid() {
     b.addEventListener("click", () => addToCart(b.dataset.add, 1));
   });
   if (admin) wireAdminControls(grid);
-  document.getElementById("adminBar").hidden = !admin;
 }
 
 function adminControls(p) {
+  const id = esc(p.id);
   return '<div class="card-admin">' +
-    '<button data-edit="' + p.id + '">Edit</button>' +
-    '<button data-img="' + p.id + '">Picture</button>' +
-    '<button data-up="' + p.id + '" title="Move up">&#8593;</button>' +
-    '<button data-down="' + p.id + '" title="Move down">&#8595;</button>' +
-    '<button class="danger" data-del="' + p.id + '">Delete</button>' +
-    '<span class="price-edit">$<input data-pricein="' + p.id + '" value="' + (p.price_cents / 100).toFixed(2) + '">' +
-    '<button data-priceset="' + p.id + '">Set</button></span>' +
+    '<button data-edit="' + id + '">Edit</button>' +
+    '<button data-img="' + id + '">Picture</button>' +
+    '<button data-up="' + id + '" title="Move up">&#8593;</button>' +
+    '<button data-down="' + id + '" title="Move down">&#8595;</button>' +
+    '<button class="danger" data-del="' + id + '">Delete</button>' +
+    '<span class="price-edit">$<input data-pricein="' + id + '" value="' + (p.price_cents / 100).toFixed(2) + '">' +
+    '<button data-priceset="' + id + '">Set</button></span>' +
   "</div>";
 }
 
@@ -291,23 +303,26 @@ function openCart() { renderCart(); document.getElementById("cartDrawer").hidden
 function closeCart() { document.getElementById("cartDrawer").hidden = true; document.getElementById("drawerOverlay").hidden = true; }
 
 /* ---------------- checkout ---------------- */
-const TAX = { WA: 0.065, CA: 0.0725, OR: 0, NY: 0.08, TX: 0.0625 };
 const STATES = ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY","DC"];
-const SHIP_STANDARD_C = 695, SHIP_EXPRESS_C = 1495, FREE_SHIP_AT_C = 7500;
-
-function taxRate(st) { return TAX[st] !== undefined ? TAX[st] : 0.05; }
-function shipCents(method, sub) {
-  if (method === "express") return SHIP_EXPRESS_C;
-  return sub >= FREE_SHIP_AT_C ? 0 : SHIP_STANDARD_C;
+// Totals always come from the server (POST /api/orders/quote), which prices
+// from the admin-editable settings. The quoted total is what we charge; the
+// server rejects an order whose payment doesn't match its own total.
+let lastQuote = null;
+function checkoutChoice() {
+  return {
+    state: document.getElementById("stateSelect").value,
+    method: document.querySelector('input[name="ship"]:checked').value
+  };
 }
-// Display-only estimate; the server recomputes authoritatively on POST /api/orders.
-function estimateTotals() {
-  const sub = cartSubtotalCents();
-  const st = document.getElementById("stateSelect").value;
-  const method = document.querySelector('input[name="ship"]:checked').value;
-  const tax = Math.round(sub * taxRate(st));
-  const ship = shipCents(method, sub);
-  return { sub, tax, ship, total: sub + tax + ship, rate: taxRate(st), method, state: st };
+async function fetchQuote() {
+  const c = checkoutChoice();
+  const q = await apiPost("/orders/quote", {
+    items: cart.map((l) => ({ product_id: l.id, qty: l.qty })),
+    state: c.state, ship_method: c.method
+  });
+  lastQuote = { sub: q.subtotal_cents, tax: q.tax_cents, ship: q.shipping_cents, total: q.total_cents,
+    rate: q.tax_rate, method: q.ship_method, state: c.state };
+  return lastQuote;
 }
 
 function fillStates() {
@@ -316,21 +331,32 @@ function fillStates() {
       '<option value="' + s + '"' + (s === "WA" ? " selected" : "") + ">" + s + "</option>").join("");
 }
 
-function renderCheckoutTotals() {
-  const t = estimateTotals();
-  document.getElementById("stdShipLabel").textContent = t.sub >= FREE_SHIP_AT_C ? "FREE" : "$6.95";
-  document.getElementById("checkoutTotals").innerHTML =
-    totalsHtml(t) + '<p class="tax-note">Tax is estimated from the shipping state and finalized at packing.</p>';
+function renderShipLabels(sub) {
+  const free = settings.free_ship_at_cents > 0 && sub >= settings.free_ship_at_cents;
+  document.getElementById("stdShipName").textContent = txt("ship_standard_label");
+  document.getElementById("expShipName").textContent = txt("ship_express_label");
+  document.getElementById("stdShipLabel").textContent = free ? "FREE" : money(settings.ship_standard_cents || 0);
+  document.getElementById("expShipLabel").textContent = money(settings.ship_express_cents || 0);
 }
-function renderPayTotals() {
-  const t = estimateTotals();
+async function renderCheckoutTotals() {
+  const box = document.getElementById("checkoutTotals");
+  try {
+    const t = await fetchQuote();
+    renderShipLabels(t.sub);
+    box.innerHTML = totalsHtml(t) + '<p class="tax-note">' + esc(txt("tax_note")) + "</p>";
+  } catch (err) {
+    box.innerHTML = '<p class="pay-error">' + esc(err.message) + "</p>";
+  }
+}
+async function renderPayTotals() {
+  const t = await fetchQuote();
   document.getElementById("payTotals").innerHTML = totalsHtml(t);
   document.getElementById("payBtn").textContent = "Pay " + money(t.total);
 }
 function totalsHtml(t) {
   return '<div class="trow"><span>Subtotal</span><span>' + money(t.sub) + "</span></div>" +
     '<div class="trow"><span>Sales tax (est. ' + (t.rate * 100).toFixed(2) + "%)</span><span>" + money(t.tax) + "</span></div>" +
-    '<div class="trow"><span>Shipping (' + t.method + ")</span><span>" + (t.ship === 0 ? "FREE" : money(t.ship)) + "</span></div>" +
+    '<div class="trow"><span>Shipping (' + esc(t.method) + ")</span><span>" + (t.ship === 0 ? "FREE" : money(t.ship)) + "</span></div>" +
     '<div class="trow grand"><span>Total</span><span>' + money(t.total) + "</span></div>";
 }
 
@@ -352,13 +378,18 @@ function openCheckout() {
   document.getElementById("checkoutOverlay").hidden = false;
 }
 
-function gotoPaymentStep() {
+async function gotoPaymentStep() {
   const inputs = document.getElementById("payStep1").querySelectorAll("input, select");
   for (const inp of inputs) if (!inp.checkValidity()) { inp.reportValidity(); return; }
+  try {
+    await renderPayTotals();
+  } catch (err) {
+    alert(err.message);
+    return;
+  }
   document.getElementById("payStep1").hidden = true;
   document.getElementById("payStep2").hidden = false;
   document.getElementById("payError").hidden = true;
-  renderPayTotals();
 }
 
 function setFieldErrors(errors) {
@@ -382,7 +413,17 @@ async function submitPayment(ev) {
   document.getElementById("processing").hidden = false;
   document.getElementById("payError").hidden = true;
 
-  const t = estimateTotals();
+  let t;
+  try {
+    t = await fetchQuote(); // re-quote right before charging
+  } catch (err) {
+    document.getElementById("processing").hidden = true;
+    document.getElementById("checkoutForm").hidden = false;
+    const pe = document.getElementById("payError");
+    pe.textContent = err.message;
+    pe.hidden = false;
+    return;
+  }
   let payment;
   try {
     // TODO(live): swap for Stripe PaymentIntent flow — see payments.js.
@@ -399,8 +440,8 @@ async function submitPayment(ev) {
   }
 
   // Payment authorized — now create the order server-side. The server
-  // recomputes tax/shipping, decrements inventory atomically, and sends
-  // the Mailpit shipping alert.
+  // recomputes tax/shipping, checks the payment matches, decrements
+  // inventory atomically, and queues the shipping alert.
   const form = document.getElementById("checkoutForm");
   const address = {
     name: form.name.value.trim(), street: form.street.value.trim(),
@@ -430,9 +471,9 @@ async function submitPayment(ev) {
   const conf = document.getElementById("confirmation");
   conf.hidden = false;
   conf.innerHTML =
-    "<h3>Thank you.</h3>" +
+    "<h3>" + esc(txt("confirm_heading")) + "</h3>" +
     '<p class="order-no">' + esc(order.order_number) + "</p>" +
-    "<p>Your pens are being wrapped. A confirmation is on its way to the bench.</p>" +
+    "<p>" + esc(txt("confirm_body")) + "</p>" +
     "<p><strong>" + money(order.total_cents) + "</strong> paid" +
     (Payments.isMock() ? " (test mode — no real charge)" : "") + " · " +
     esc(order.address.city) + ", " + esc(order.address.state) + "</p>" +
@@ -447,7 +488,7 @@ async function submitPayment(ev) {
 function fillEditorSelects() {
   document.getElementById("editorCategory").innerHTML =
     '<option value="">Uncategorized</option>' + categories.map((c) =>
-      '<option value="' + c.id + '">' + esc(c.name) + "</option>").join("");
+      '<option value="' + esc(c.id) + '">' + esc(c.name) + "</option>").join("");
   document.getElementById("editorIcon").innerHTML =
     Object.keys(ICONS).map((k) => '<option value="' + k + '">' + esc(ICONS[k].label) + "</option>").join("");
 }
@@ -521,7 +562,7 @@ function renderCatList() {
   categories.forEach((c) => {
     const li = document.createElement("li");
     li.innerHTML = "<span>" + esc(c.name) + '<span class="count">' + c.product_count + " pen" + (c.product_count === 1 ? "" : "s") + "</span></span>" +
-      '<span class="mini-btns"><button data-rename="' + c.id + '">rename</button><button data-delcat="' + c.id + '">delete</button></span>';
+      '<span class="mini-btns"><button data-rename="' + esc(c.id) + '">rename</button><button data-delcat="' + esc(c.id) + '">delete</button></span>';
     ul.appendChild(li);
   });
   ul.querySelectorAll("[data-rename]").forEach((b) =>
@@ -531,7 +572,6 @@ function renderCatList() {
       if (!v) return;
       try {
         await apiPut("/categories/" + c.id, { name: v });
-        if (activeCat === c.name) activeCat = v;
         await refresh(); renderCatList(); renderCats(); renderGrid();
       } catch (err) { alert("Rename failed: " + err.message); }
     }));
@@ -541,7 +581,7 @@ function renderCatList() {
       if (c.product_count > 0 &&
           !confirm('Delete "' + c.name + '"? Its ' + c.product_count + " pen(s) become Uncategorized.")) return;
       await apiDel("/categories/" + c.id);
-      if (activeCat === c.name) activeCat = "All";
+      if (activeCat === c.id) activeCat = null;
       await refresh(); renderCatList(); renderCats(); renderGrid();
     }));
 }
@@ -571,14 +611,164 @@ async function renderOutbox() {
   }
 }
 
-/* ---------------- admin toggle ---------------- */
-function setAdmin(on) {
-  admin = on;
-  try { localStorage.setItem("dp_admin", on ? "1" : "0"); } catch (e) {}
-  if (on && new URLSearchParams(location.search).get("admin") === "1") {
-    history.replaceState(null, "", location.pathname);
+/* ---------------- site settings (content + theme) ---------------- */
+const THEME_VARS = {
+  color_paper: "--paper", color_paper_deep: "--paper-deep", color_ink: "--ink",
+  color_ink_soft: "--ink-soft", color_rule: "--rule", color_accent: "--accent",
+  color_accent_dark: "--accent-dark", color_brass: "--brass", color_sold: "--sold"
+};
+
+async function loadSettings() {
+  const r = await apiGet("/settings");
+  settings = r.values;
+  settingsMeta = { fields: r.fields, fonts: r.fonts };
+}
+
+// All values are applied as text (textContent) or validated CSS values —
+// never as HTML — so editable content can't inject markup.
+function applySettings() {
+  document.title = txt("page_title");
+  document.getElementById("estLine").textContent = txt("est_line");
+  document.getElementById("shopName").textContent = txt("shop_name");
+  document.getElementById("tagline").textContent = txt("tagline");
+  document.getElementById("aboutHeading").textContent = txt("about_heading");
+  document.getElementById("footerAddress").textContent = txt("footer_address");
+  document.getElementById("footerFineprint").textContent = txt("footer_fineprint");
+  const ann = document.getElementById("announcement");
+  ann.textContent = txt("announcement");
+  ann.hidden = !txt("announcement");
+  const about = document.getElementById("aboutBody");
+  about.textContent = "";
+  txt("about_body").split(/\n\s*\n/).filter((x) => x.trim()).forEach((para) => {
+    const el = document.createElement("p");
+    el.textContent = para.trim();
+    about.appendChild(el);
+  });
+  const root = document.documentElement.style;
+  Object.keys(THEME_VARS).forEach((k) => {
+    if (/^#[0-9a-f]{6}$/i.test(settings[k] || "")) root.setProperty(THEME_VARS[k], settings[k]);
+  });
+  if (settingsMeta.fonts[settings.heading_font]) root.setProperty("--heading-font", settingsMeta.fonts[settings.heading_font]);
+  if (settingsMeta.fonts[settings.body_font]) root.setProperty("--body-font", settingsMeta.fonts[settings.body_font]);
+}
+
+function ratesToText(obj) {
+  return Object.keys(obj || {}).sort().map((k) => k + "=" + +(obj[k] * 100).toFixed(4)).join("\n");
+}
+function textToRates(t) {
+  const out = {};
+  t.split(/[\n,]+/).map((x) => x.trim()).filter(Boolean).forEach((pair) => {
+    const m = /^([A-Za-z]{2})\s*[=:]\s*([0-9.]+)\s*%?$/.exec(pair);
+    if (!m) throw new Error('Tax rates: "' + pair + '" should look like WA=6.5');
+    out[m[1].toUpperCase()] = parseFloat(m[2]) / 100;
+  });
+  return out;
+}
+
+function fieldInput(f, v) {
+  const name = 'name="' + esc(f.key) + '"';
+  switch (f.type) {
+    case "textarea":
+      return '<textarea ' + name + ' rows="5" maxlength="' + f.max + '">' + esc(v) + "</textarea>";
+    case "color":
+      return '<input type="color" ' + name + ' value="' + esc(v) + '">';
+    case "font":
+      return "<select " + name + ">" + f.options.map((o) =>
+        '<option value="' + esc(o) + '"' + (o === v ? " selected" : "") + ">" + esc(o) + "</option>").join("") + "</select>";
+    case "percent":
+      return '<input ' + name + ' inputmode="decimal" value="' + esc(+(v * 100).toFixed(4)) + '">';
+    case "money":
+      return '<input ' + name + ' inputmode="decimal" value="' + esc((v / 100).toFixed(2)) + '">';
+    case "rates":
+      return '<textarea ' + name + ' rows="4">' + esc(ratesToText(v)) + "</textarea>";
+    case "email":
+      return '<input type="email" ' + name + ' value="' + esc(v) + '">';
+    default:
+      return '<input ' + name + ' maxlength="' + (f.max || 200) + '" value="' + esc(v) + '">';
   }
-  renderCats(); renderGrid();
+}
+
+async function openSettings() {
+  const r = await apiGet("/admin/settings"); // includes private fields
+  const groups = {};
+  r.fields.forEach((f) => { (groups[f.group] = groups[f.group] || []).push(f); });
+  document.getElementById("settingsFields").innerHTML = Object.keys(groups).map((g) =>
+    '<fieldset class="settings-group"><legend>' + esc(g) + "</legend>" +
+    groups[g].map((f) => '<label' + (f.type === "color" ? ' class="color-row"' : "") + ">" +
+      esc(f.label) + " " + fieldInput(f, r.values[f.key]) + "</label>").join("") +
+    "</fieldset>").join("");
+  document.getElementById("settingsError").hidden = true;
+  document.getElementById("settingsOverlay").hidden = false;
+}
+
+function readSettingsForm() {
+  const form = document.getElementById("settingsForm");
+  const out = {};
+  settingsMeta.fields.forEach((f) => {
+    const el = form.elements[f.key];
+    if (!el) return;
+    const v = el.value;
+    if (f.type === "percent") out[f.key] = parseFloat(v) / 100;
+    else if (f.type === "money") out[f.key] = Math.round(parseFloat(v) * 100);
+    else if (f.type === "rates") out[f.key] = textToRates(v);
+    else out[f.key] = v;
+  });
+  return out;
+}
+
+async function saveSettings(ev) {
+  ev.preventDefault();
+  const errBox = document.getElementById("settingsError");
+  errBox.hidden = true;
+  try {
+    await apiPut("/settings", readSettingsForm());
+    await loadSettings();
+    applySettings(); renderAll();
+    document.getElementById("settingsOverlay").hidden = true;
+  } catch (err) {
+    errBox.textContent = err.message;
+    errBox.hidden = false;
+  }
+}
+
+async function resetTheme() {
+  const patch = {};
+  Object.keys(THEME_VARS).concat(["heading_font", "body_font"]).forEach((k) => { patch[k] = null; });
+  await apiPut("/settings", patch);
+  document.documentElement.removeAttribute("style");
+  await loadSettings();
+  applySettings(); renderAll();
+  await openSettings();
+}
+
+/* ---------------- admin login / logout ---------------- */
+function renderAll() { renderCats(); renderGrid(); renderCart(); }
+
+function openLogin() {
+  document.getElementById("loginError").hidden = true;
+  document.getElementById("loginForm").reset();
+  document.getElementById("loginOverlay").hidden = false;
+  document.getElementById("loginPassword").focus();
+}
+
+async function submitLogin(ev) {
+  ev.preventDefault();
+  const errBox = document.getElementById("loginError");
+  try {
+    await apiPost("/admin/login", { password: document.getElementById("loginPassword").value });
+    admin = true;
+    document.getElementById("loginOverlay").hidden = true;
+    renderAll();
+  } catch (err) {
+    errBox.textContent = err.message;
+    errBox.hidden = false;
+  }
+}
+
+async function logout() {
+  try { await apiPost("/admin/logout", {}); } catch (e) { /* cookie cleared either way */ }
+  admin = false;
+  renderAll();
 }
 
 /* ---------------- wire up ---------------- */
@@ -597,7 +787,26 @@ document.getElementById("backToAddrBtn").addEventListener("click", () => {
 document.getElementById("ccNum").addEventListener("input", function () { this.value = Payments.formatCardNumber(this.value); });
 document.getElementById("ccExp").addEventListener("input", function () { this.value = Payments.formatExpiry(this.value); });
 document.getElementById("ccCvc").addEventListener("input", function () { this.value = Payments.formatCVC(this.value); });
-document.getElementById("adminLink").addEventListener("click", (e) => { e.preventDefault(); setAdmin(!admin); });
+document.getElementById("adminLink").addEventListener("click", (e) => {
+  e.preventDefault();
+  if (admin) logout(); else openLogin();
+});
+document.getElementById("loginForm").addEventListener("submit", submitLogin);
+document.getElementById("closeLoginBtn").addEventListener("click", () => {
+  document.getElementById("loginOverlay").hidden = true;
+});
+document.getElementById("settingsBtn").addEventListener("click", () => {
+  openSettings().catch((err) => alert("Couldn't load settings: " + err.message));
+});
+document.getElementById("closeSettingsBtn").addEventListener("click", () => {
+  document.getElementById("settingsOverlay").hidden = true;
+});
+document.getElementById("settingsForm").addEventListener("submit", saveSettings);
+document.getElementById("resetThemeBtn").addEventListener("click", () => {
+  resetTheme().catch((err) => alert("Reset failed: " + err.message));
+});
+document.getElementById("stateSelect").addEventListener("change", renderCheckoutTotals);
+document.querySelectorAll('input[name="ship"]').forEach((r) => r.addEventListener("change", renderCheckoutTotals));
 document.getElementById("addPenBtn").addEventListener("click", () => openEditor(null));
 document.getElementById("manageCatsBtn").addEventListener("click", () => {
   renderCatList();
@@ -610,7 +819,7 @@ document.getElementById("outboxBtn").addEventListener("click", () => {
 document.getElementById("closeOutboxBtn").addEventListener("click", () => {
   document.getElementById("outboxOverlay").hidden = true;
 });
-document.getElementById("exitAdminBtn").addEventListener("click", () => setAdmin(false));
+document.getElementById("exitAdminBtn").addEventListener("click", logout);
 document.getElementById("closeEditorBtn").addEventListener("click", () => {
   document.getElementById("editorOverlay").hidden = true;
 });
@@ -642,7 +851,7 @@ document.getElementById("addCatForm").addEventListener("submit", async (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     closeCart();
-    ["checkoutOverlay", "editorOverlay", "catOverlay", "outboxOverlay"].forEach((id) => {
+    ["checkoutOverlay", "editorOverlay", "catOverlay", "outboxOverlay", "loginOverlay", "settingsOverlay"].forEach((id) => {
       document.getElementById(id).hidden = true;
     });
   }
@@ -652,13 +861,17 @@ document.addEventListener("keydown", (e) => {
 (async function init() {
   fillStates();
   try {
-    await refresh();
+    const [, sess] = await Promise.all([loadSettings(), apiGet("/admin/session"), refresh()]);
+    admin = !!sess.admin;
   } catch (err) {
     document.getElementById("productGrid").innerHTML =
-      '<p class="cart-empty">The shop server is unreachable. Start it with <code>node server/index.js</code>.</p>';
+      '<p class="cart-empty">The shop server is unreachable. Start it with <code>npm start</code>.</p>';
     return;
   }
-  renderCats();
-  renderGrid();
-  renderCart();
+  applySettings();
+  renderAll();
+  if (new URLSearchParams(location.search).get("admin") === "1") {
+    history.replaceState(null, "", location.pathname);
+    if (!admin) openLogin();
+  }
 })();
