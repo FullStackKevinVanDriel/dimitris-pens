@@ -3,6 +3,7 @@
     "dotenv": "^18.0.8",
     "express": "^4.21.2",
     "helmet": "^8.3.0",
+    "node-pg-migrate": "^9.0.0",
     "pg": "^8.13.1"
   },
   "description": "Dimitris Pens — custom pen shop. Express API + Postgres, static frontend served by the same app. Deploy: see docs/DEPLOYMENT.md.",
@@ -18,7 +19,12 @@
     "setup": "node scripts/setup.js",
     "hash-password": "node scripts/hash-password.js",
     "smoke": "node smoke/test.js",
-    "smoke:chrome": "SMOKE_CHANNEL=chrome SMOKE_HEADED=1 node smoke/test.js"
+    "smoke:chrome": "SMOKE_CHANNEL=chrome SMOKE_HEADED=1 node smoke/test.js",
+    "migrate": "node scripts/migrate.js up",
+    "migrate:down": "node scripts/migrate.js down",
+    "migrate:create": "node scripts/migrate.js create",
+    "vercel-build": "node scripts/vercel-build.js",
+    "dev": "npm run migrate && npm start"
   },
   "version": "3.0.0"
 }

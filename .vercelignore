@@ -1,0 +1,7 @@
+# Never upload local secrets or dev-only files with `vercel deploy`.
+.env
+.env.*
+!.env.example
+smoke/
+docs/
+.github/

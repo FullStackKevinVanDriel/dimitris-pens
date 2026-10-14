@@ -58,6 +58,13 @@ Changing the admin password: `npm run hash-password`, update
    (require PR + checks), and consider making the repo private.
 7. Optional: add a custom domain in Vercel (TLS is automatic).
 
+## Schema migrations
+
+Production builds run `npm run migrate` (see `scripts/vercel-build.js`)
+before the deployment goes live. Preview builds skip it until Preview has
+its own database: create a Neon branch for Preview, point Preview's
+`POSTGRES_URL` at it, then set `MIGRATE_ON_BUILD=true` for Preview.
+
 ## Before taking real money
 
 - Replace the mock payment with Stripe (TODOs in `server/app.js` and
@@ -65,8 +72,8 @@ Changing the admin password: `npm run hash-password`, update
   `payments.status = 'succeeded'`. Add `https://js.stripe.com` to the CSP
   `script-src`/`frame-src` in `server/app.js`.
 - Send shipping alerts through Resend or Postmark (`queueShippingAlert`).
-- Add a CI workflow that runs `npm run smoke` against a Postgres service
-  container on every PR.
+- CI (`.github/workflows/ci.yml`) runs migrations + the smoke test on every
+  PR. Make it a required check on `main` once it has run.
 
 ## Alternative: self-host (VPS + Docker + Caddy)
 

@@ -1,1 +1,7 @@
-{"rewrites":[{"destination":"/api","source":"/(.*)"}]}
+{
+  "outputDirectory": "server/public",
+  "rewrites": [{ "source": "/(.*)", "destination": "/api" }],
+  "functions": {
+    "api/index.js": { "includeFiles": "migrations/*.sql" }
+  }
+}

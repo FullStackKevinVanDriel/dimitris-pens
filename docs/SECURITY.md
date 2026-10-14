@@ -17,6 +17,7 @@ Review of the v2 shop (commit `2e6cc8d`) and what v3 changed.
 | 9 | Low | 6 MB JSON body limit on every route. | 5 MB only on `/api/products` (photos), 100 KB everywhere else. |
 | 10 | Low | `Math.random()` for IDs and order numbers. | `crypto.randomBytes`. |
 | 11 | Low | `package-lock.json` was git-ignored, so deploys weren't reproducible. | Lockfile committed. |
+| 13 | Medium | **Source files were publicly downloadable.** Vercel served the repo root as static files ahead of the API rewrite, so `/server/app.js`, `/smoke/test.js`, `/docs/...` all returned 200. | `vercel.json` `outputDirectory: server/public`, so only the four public assets are static. `.vercelignore` keeps `.env` out of CLI uploads. |
 | 12 | Low | Checkout tax/shipping logic was duplicated in the browser and could drift from the server. | The browser shows `POST /api/orders/quote` (server math) and charges exactly that. |
 
 Login is rate limited to 10 failures per IP per 15 minutes. The counter is stored in the DB, so it works across serverless instances. Admin writes are also CSRF-hardened: they must be JSON, and a foreign `Origin` header gets a 403.

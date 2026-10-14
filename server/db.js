@@ -4,9 +4,9 @@
  * SSL (with certificate verification) is enabled automatically for Neon /
  * Vercel Postgres or when PGSSL=true; local docker Postgres works without it.
  *
- * Exports { pool, uid, ready }: `ready` resolves once the schema is applied,
- * the catalog is seeded (only when categories is empty), and any plaintext
- * or old-key PII rows have been (re-)encrypted.
+ * Exports { pool, uid, ready, init }: `ready`/`init()` resolve once pending
+ * migrations have been checked and any plaintext or old-key PII rows have
+ * been (re-)encrypted. Schema + seed data are migrations (see migrations/).
  */
 "use strict";
 
@@ -62,58 +62,46 @@ async function encryptPII(client) {
   }
 }
 
-const SEED_CATS = [
-  { id: "c1", name: "Fountain Pens", sort_order: 0 },
-  { id: "c2", name: "Rollerballs", sort_order: 1 },
-  { id: "c3", name: "Pencils", sort_order: 2 }
-];
-// id, name, description, price_cents, category_id, image_key, inventory, sort_order
-const SEED_PRODUCTS = [
-  ["p1", "The Meridian", "Ebonite fountain pen with a tuned steel nib. Writes wet and smooth.", 18500, "c1", "classic", 4, 0],
-  ["p2", "Harbor & Pine", "Forest-green ebonite, brass trim, medium nib ground in-house.", 24000, "c1", "forest", 2, 1],
-  ["p3", "The Night Desk", "Midnight-blue lacquer over brass. Our finest nib, broad italic.", 32000, "c1", "midnight", 1, 2],
-  ["p4", "Commuter Roller", "Black anodized aluminum rollerball. Takes standard refills.", 8500, "c2", "roller", 9, 3],
-  ["p5", "Brass Daily", "Solid brass body that picks up a patina. Weighted for long notes.", 12000, "c2", "brassrb", 6, 4],
-  ["p6", "Cedar No. 2", "Hand-turned cedar mechanical pencil, 0.7mm, brass clutch.", 4500, "c3", "pencil", 12, 5],
-  ["p7", "The Draftsman", "Knurled grip drafting pencil, 0.5mm. A shop favorite — back soon.", 6800, "c3", "pencil", 0, 6]
-];
 
-async function seed(client) {
-  const { rows } = await client.query("SELECT COUNT(*)::int AS n FROM categories");
-  if (rows[0].n > 0) return;
-  for (const c of SEED_CATS) {
-    await client.query(
-      "INSERT INTO categories (id, name, sort_order) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING",
-      [c.id, c.name, c.sort_order]
-    );
+// Cold-start init. Schema changes are NOT applied here — they're versioned
+// migrations (migrations/, `npm run migrate`, run by the Vercel build).
+// Boot only warns about pending migrations and runs the PII backfill /
+// key-rotation pass, serialized across instances with an advisory lock.
+// A failure (e.g. Neon waking from sleep) is not cached: the next call
+// retries instead of failing the instance forever.
+const INIT_LOCK = 4242001;
+const MIGRATIONS_DIR = path.join(__dirname, "..", "migrations");
+
+async function checkMigrations(client) {
+  // migrations/ ships with the function via vercel.json includeFiles; if it's
+  // ever missing, skip the check (the build already ran the migrations).
+  if (!fs.existsSync(MIGRATIONS_DIR)) return [];
+  const files = fs.readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).map((f) => f.replace(/\.sql$/, ""));
+  const { rows: t } = await client.query("SELECT to_regclass('public.pgmigrations') AS t");
+  const applied = new Set();
+  if (t[0].t) (await client.query("SELECT name FROM pgmigrations")).rows.forEach((r) => applied.add(r.name));
+  const pending = files.filter((f) => !applied.has(f));
+  if (pending.length) {
+    console.error(`DB has ${pending.length} pending migration(s): ${pending.join(", ")} — run \`npm run migrate\``);
   }
-  for (const p of SEED_PRODUCTS) {
-    await client.query(
-      `INSERT INTO products
-       (id, name, description, price_cents, category_id, image_key, inventory, sort_order)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (id) DO NOTHING`,
-      p
-    );
-  }
-  console.log("seeded catalog:", SEED_CATS.length, "categories,", SEED_PRODUCTS.length, "products");
+  return pending;
 }
 
-// Schema + seed + PII backfill. Serverless cold starts can run this on
-// several instances at once, so it's serialized with an advisory lock and
-// done in one transaction. A failure (e.g. Neon waking from sleep) is not
-// cached: the next call retries instead of failing the instance forever.
-const INIT_LOCK = 4242001;
 let initPromise = null;
 function init() {
   if (!initPromise) {
     initPromise = (async () => {
-      const schema = fs.readFileSync(path.join(__dirname, "schema.sql"), "utf8");
       const client = await pool.connect();
       try {
+        const pending = await checkMigrations(client);
+        // Refuse only an empty database. A pre-migrations database (tables
+        // exist, no history yet) works fine until the next migrate adopts it.
+        if (pending.includes("001_baseline")) {
+          const { rows } = await client.query("SELECT to_regclass('public.orders') AS t");
+          if (!rows[0].t) throw new Error("database not migrated — run `npm run migrate`");
+        }
         await client.query("BEGIN");
         await client.query("SELECT pg_advisory_xact_lock($1)", [INIT_LOCK]);
-        await client.query(schema);
-        await seed(client);
         await encryptPII(client);
         await client.query("COMMIT");
       } catch (e) {

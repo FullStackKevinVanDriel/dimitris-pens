@@ -1,6 +1,8 @@
--- Dimitris Pens — Postgres schema.
--- Applied on boot (CREATE TABLE IF NOT EXISTS, idempotent).
--- Prices are integer cents. Timestamps default to NOW().
+-- Up Migration
+-- Baseline: the schema that server/schema.sql applied on boot up to v3.
+-- Written with IF NOT EXISTS so it is a no-op on databases that already
+-- have it (production) and just gets recorded in pgmigrations.
+
 
 CREATE TABLE IF NOT EXISTS categories (
   id         TEXT PRIMARY KEY,
@@ -107,3 +109,6 @@ CREATE TABLE IF NOT EXISTS site_settings (
   value      JSONB NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Down Migration
+DROP TABLE IF EXISTS site_settings, payments, login_failures, admin_sessions, shipping_alerts, order_items, orders, products, categories;
