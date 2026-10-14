@@ -22,10 +22,29 @@ const { hashPassword } = require("../server/password");
 const { migrate } = require("../scripts/migrate");
 
 const ADMIN_PASSWORD = "smoke-test-password-123";
+// Fake Resend API: records every email; `failNext` makes the next one 500.
+const RESEND_PORT = 3199;
+const fakeResend = { emails: [], failNext: false, server: null };
+function startFakeResend() {
+  fakeResend.server = require("http").createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => { body += c; });
+    req.on("end", () => {
+      const fail = fakeResend.failNext;
+      fakeResend.failNext = false;
+      fakeResend.emails.push({ headers: req.headers, body: JSON.parse(body || "{}"), failed: fail });
+      res.writeHead(fail ? 500 : 200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(fail ? { message: "simulated outage" } : { id: "re_test_" + fakeResend.emails.length }));
+    });
+  }).listen(RESEND_PORT);
+}
+
 const SECRETS = {
   ADMIN_PASSWORD_HASH: hashPassword(ADMIN_PASSWORD),
   PII_ENC_KEY: crypto.randomBytes(32).toString("base64"),
-  COOKIE_SECURE: "false"
+  COOKIE_SECURE: "false",
+  RESEND_API_KEY: "re_smoke_key",
+  RESEND_API_URL: `http://localhost:${RESEND_PORT}/emails`
 };
 
 // Own port, so a dev server on :3001 doesn't get tested by mistake.
@@ -86,8 +105,10 @@ const resetTestDb = () => resetDb("dimitris_test");
 /* ================= migration tests ================= */
 async function migrationTests() {
   step("migrations: fresh database");
+  const allMigrations = require("fs").readdirSync(require("path").join(__dirname, "..", "migrations"))
+    .filter((f) => f.endsWith(".sql")).map((f) => f.replace(/\.sql$/, "")).sort();
   let done = await migrate("up", { databaseUrl: testDbUrl(), quiet: true });
-  assert(done.map((m) => m.name).join(",") === "001_baseline,002_seed_catalog", "applied 001_baseline, 002_seed_catalog");
+  assert(done.map((m) => m.name).join(",") === allMigrations.join(","), `applied all ${allMigrations.length} migrations in order`);
   done = await migrate("up", { databaseUrl: testDbUrl(), quiet: true });
   assert(done.length === 0, "second run is a no-op");
 
@@ -103,7 +124,7 @@ async function migrationTests() {
   await legacy.query("INSERT INTO categories (id, name) VALUES ('live1', 'Live Category')");
   await legacy.query("INSERT INTO products (id, name, price_cents, category_id) VALUES ('live-p', 'Live Pen', 100, 'live1')");
   done = await migrate("up", { databaseUrl: legacyUrl, quiet: true });
-  assert(done.length === 2, "both migrations recorded on the existing database");
+  assert(done.length === allMigrations.length, "all migrations recorded on the existing database");
   const { rows } = await legacy.query("SELECT (SELECT COUNT(*)::int FROM categories) AS c, (SELECT COUNT(*)::int FROM products) AS p");
   assert(rows[0].c === 1 && rows[0].p === 1, "existing data kept, seed skipped (shop not empty)");
   await legacy.end();
@@ -127,7 +148,10 @@ async function startServer() {
   }
   throw new Error("ASSERT FAILED: server did not become healthy in 30s");
 }
-function stopServer() { if (serverProc) serverProc.kill(); }
+function stopServer() {
+  if (serverProc) serverProc.kill();
+  if (fakeResend.server) fakeResend.server.close();
+}
 
 /* ================= API tests ================= */
 async function apiTests() {
@@ -294,6 +318,34 @@ async function apiTests() {
   assert(/Shipping alert/.test(r.data[0].subject), "alert subject correct");
   assert(r.data[0].body.includes("Api Buyer"), "alert body decrypted for admin");
 
+  step("email: shipping alert sent through Resend");
+  const sentMail = fakeResend.emails[0];
+  assert(fakeResend.emails.length === 1 && !sentMail.failed, "1 email sent for the order");
+  assert(sentMail.headers.authorization === "Bearer re_smoke_key", "API key sent as bearer token");
+  assert(sentMail.headers["idempotency-key"] === "shipping-alert-" + r.data[0].id, "idempotency key = alert id");
+  assert(sentMail.body.subject.includes(order.order_number) && sentMail.body.to[0] === r.data[0].recipient,
+    "subject has order number, sent to the alert recipient");
+  assert(sentMail.body.text.includes("Api Buyer") && sentMail.body.text.includes("1 Test Ln"), "email body has the ship-to address");
+  assert(r.data[0].status === "sent" && r.data[0].provider_id === "re_test_1" && r.data[0].sent_at, "alert marked sent with provider id");
+
+  step("email: provider outage doesn't block the order; retry from Outbox");
+  fakeResend.failNext = true;
+  const smallItems = [{ product_id: "p6", qty: 1 }];
+  r = await api("POST", "/api/orders/quote", { items: smallItems, state: "WA" }, 200);
+  const pay2 = (await api("POST", "/api/payments/mock", { amount_cents: r.data.total_cents, card: { number: "4242424242424242" } }, 200)).data.id;
+  r = await api("POST", "/api/orders", { items: smallItems, address: buyer, payment_id: pay2 }, 201);
+  const order2 = r.data.order;
+  assert(true, "order " + order2.order_number + " created during email outage");
+  r = await api("GET", "/api/alerts", undefined, 200);
+  const failedAlert = r.data.find((a) => a.order_id === order2.id);
+  assert(failedAlert.status === "failed" && /500/.test(failedAlert.last_error) && failedAlert.attempts === 1, "alert marked failed with error");
+  await api("POST", "/api/alerts/" + failedAlert.id + "/send", {}, 401, { anon: true });
+  r = await api("POST", "/api/alerts/" + failedAlert.id + "/send", {}, 200);
+  assert(r.data.ok && r.data.status === "sent", "admin retry sends it");
+  assert(fakeResend.emails.at(-1).headers["idempotency-key"] === "shipping-alert-" + failedAlert.id, "retry reuses the idempotency key");
+  r = await api("GET", "/api/alerts", undefined, 200);
+  assert(r.data.find((a) => a.id === failedAlert.id).attempts === 2, "attempts = 2");
+
   step("api: delete test product");
   await api("DELETE", "/api/products/" + pid, undefined, 200);
   r = await api("GET", "/api/products", undefined, 200);
@@ -454,6 +506,7 @@ async function run() {
   }
   step("reset test database");
   await resetTestDb();
+  startFakeResend();
   await migrationTests();
   await startServer();
   try {
