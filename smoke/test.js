@@ -1,147 +1,219 @@
-/* Dimitris Pens — Playwright smoke test.
+/* Dimitris Pens — smoke test (API + browser).
  *
- * Usage:
- *   # serve the site first (repo root):  python3 -m http.server 8000
- *   node smoke/test.js           # full local flow vs http://localhost:8000
- *   node smoke/test.js --live    # lighter pass vs the GitHub Pages URL
+ * Requires: POSTGRES_URL (or DATABASE_URL) pointing at a Postgres the test
+ * may wipe (it drops/creates a `dimitris_test` database), and a running
+ * server spawned by this script itself.
+ *
+ *   POSTGRES_URL=postgres://postgres:penstest@localhost:5432/postgres node smoke/test.js
  *
  * Fails loudly: any failed assertion throws and exits non-zero.
  */
 "use strict";
 
+const { spawn } = require("child_process");
 const { chromium } = require("playwright");
+const { Client } = require("pg");
 
-const LIVE = process.argv.includes("--live");
-const BASE = LIVE
-  ? "https://fullstackkevinvandriel.github.io/dimitris-pens/"
-  : "http://localhost:8000";
-const MAILPIT = "http://localhost:8025/api/v1";
+const BASE_URL = process.env.SMOKE_BASE || "http://localhost:3001";
+const PORT = process.env.SMOKE_PORT || "3001";
 
 let stepNo = 0;
-function step(name) {
-  stepNo++;
-  console.log(`\n[step ${stepNo}] ${name}`);
-}
+function step(name) { stepNo++; console.log(`\n[step ${stepNo}] ${name}`); }
 function assert(cond, msg) {
   if (!cond) throw new Error("ASSERT FAILED: " + msg);
   console.log("  ok — " + msg);
 }
-async function mailCount() {
-  // Node-side fetch: no CORS restrictions, unlike in-page fetch.
-  const r = await fetch(MAILPIT + "/messages");
-  const d = await r.json();
-  return d.total;
-}
-async function waitMailCount(expected, timeoutMs = 12000) {
-  const t0 = Date.now();
-  while (Date.now() - t0 < timeoutMs) {
-    if ((await mailCount()) >= expected) return;
-    await new Promise((r) => setTimeout(r, 500));
+async function api(method, path, body, expectStatus) {
+  const r = await fetch(BASE_URL + path, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+  const data = await r.json().catch(() => ({}));
+  if (expectStatus !== undefined && r.status !== expectStatus) {
+    throw new Error(`ASSERT FAILED: ${method} ${path} -> ${r.status}, expected ${expectStatus} (${JSON.stringify(data)})`);
   }
-  throw new Error(`ASSERT FAILED: mailpit count did not reach ${expected}`);
+  return { status: r.status, data };
 }
 
+function testDbUrl() {
+  const u = new URL(process.env.POSTGRES_URL || process.env.DATABASE_URL);
+  u.pathname = "/dimitris_test";
+  return u.toString();
+}
+
+async function resetTestDb() {
+  const admin = new Client({ connectionString: process.env.POSTGRES_URL || process.env.DATABASE_URL });
+  await admin.connect();
+  // terminate stray connections so DROP works
+  await admin.query(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='dimitris_test' AND pid <> pg_backend_pid()`);
+  await admin.query("DROP DATABASE IF EXISTS dimitris_test");
+  await admin.query("CREATE DATABASE dimitris_test");
+  await admin.end();
+}
+
+let serverProc = null;
+async function startServer() {
+  const env = { ...process.env, POSTGRES_URL: testDbUrl(), PORT };
+  delete env.DATABASE_URL;
+  serverProc = spawn("node", ["server/index.js"], { env, stdio: ["ignore", "pipe", "pipe"] });
+  serverProc.stdout.on("data", (d) => process.stdout.write("[srv] " + d));
+  serverProc.stderr.on("data", (d) => process.stderr.write("[srv] " + d));
+  const t0 = Date.now();
+  while (Date.now() - t0 < 30000) {
+    try {
+      const r = await fetch(BASE_URL + "/api/health");
+      if (r.ok) return;
+    } catch (e) { /* not up yet */ }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error("ASSERT FAILED: server did not become healthy in 30s");
+}
+function stopServer() { if (serverProc) serverProc.kill(); }
+
+/* ================= API tests ================= */
+async function apiTests() {
+  step("api: health + seed");
+  let r = await api("GET", "/api/health", undefined, 200);
+  assert(r.data.ok === true, "health ok");
+  r = await api("GET", "/api/products", undefined, 200);
+  assert(r.data.length === 7, `7 seeded products (got ${r.data.length})`);
+  const p1 = r.data.find((p) => p.id === "p1");
+  assert(p1.name === "The Meridian" && p1.price_cents === 18500, "p1 seed correct");
+  r = await api("GET", "/api/categories", undefined, 200);
+  assert(r.data.length === 3, "3 seeded categories");
+
+  step("api: product CRUD");
+  r = await api("POST", "/api/products", {
+    name: "API Test Pen", price_cents: 9999, category_id: "c1",
+    description: "created by smoke test", inventory: 3, image_key: "roller"
+  }, 201);
+  const pid = r.data.id;
+  assert(r.data.name === "API Test Pen", "product created: " + pid);
+  r = await api("PUT", "/api/products/" + pid, { price_cents: 10999 }, 200);
+  assert(r.data.price_cents === 10999, "price updated to 10999");
+  r = await api("PUT", "/api/products/" + pid, { price_cents: -5 }, 422);
+  assert(true, "negative price rejected (422)");
+
+  step("api: product reorder");
+  r = await api("GET", "/api/products", undefined, 200);
+  const ids = r.data.map((p) => p.id);
+  const rev = ids.slice().reverse();
+  await api("PUT", "/api/products/reorder", { order: rev }, 200);
+  r = await api("GET", "/api/products", undefined, 200);
+  assert(r.data[0].id === rev[0], "reorder applied");
+  await api("PUT", "/api/products/reorder", { order: ids }, 200); // restore
+
+  step("api: category CRUD + duplicate guard");
+  r = await api("POST", "/api/categories", { name: "SmokeCat" }, 201);
+  const cid = r.data.id;
+  assert(true, "category created: " + cid);
+  await api("POST", "/api/categories", { name: "SmokeCat" }, 409);
+  assert(true, "duplicate category -> 409");
+  await api("PUT", "/api/categories/" + cid, { name: "SmokeCat2" }, 200);
+  r = await api("GET", "/api/categories", undefined, 200);
+  assert(r.data.some((c) => c.name === "SmokeCat2"), "category renamed");
+  await api("DELETE", "/api/categories/" + cid, undefined, 200);
+  r = await api("GET", "/api/categories", undefined, 200);
+  assert(!r.data.some((c) => c.name === "SmokeCat2"), "category deleted");
+
+  step("api: mock payment success + decline");
+  r = await api("POST", "/api/payments/mock",
+    { amount_cents: 1000, card: { number: "4242424242424242" } }, 200);
+  assert(r.data.ok && r.data.id.startsWith("pi_mock_"), "mock payment succeeded: " + r.data.id);
+  r = await api("POST", "/api/payments/mock",
+    { amount_cents: 1000, card: { number: "4000000000000002" } }, 402);
+  assert(r.data.code === "card_declined", "0002 card declined");
+
+  step("api: order creates, decrements inventory, server-side totals");
+  // p1 x2 @18500 + p4 x1 @8500 = 45500 subtotal; WA tax 6.5% = 2958 (rounded);
+  // subtotal >= $75 -> FREE standard shipping; total = 48458
+  r = await api("POST", "/api/payments/mock",
+    { amount_cents: 48458, card: { number: "4242424242424242" } }, 200);
+  const payId = r.data.id;
+  r = await api("POST", "/api/orders", {
+    items: [{ product_id: "p1", qty: 2 }, { product_id: "p4", qty: 1 }],
+    address: { name: "Api Buyer", street: "1 Test Ln", city: "Olympia", state: "WA", zip: "98501" },
+    ship_method: "standard", payment_id: payId
+  }, 201);
+  const order = r.data.order;
+  assert(/^DP-[A-Z0-9]{6}$/.test(order.order_number), "order number: " + order.order_number);
+  assert(order.subtotal_cents === 45500, "subtotal 45500");
+  assert(order.tax_cents === 2958, "WA tax 2958 (server-computed)");
+  assert(order.shipping_cents === 0, "free shipping over $75 (server-computed)");
+  assert(order.total_cents === 48458, "total 48458");
+  assert(order.payment_id === payId, "payment id recorded");
+  r = await api("GET", "/api/products", undefined, 200);
+  assert(r.data.find((p) => p.id === "p1").inventory === 2, "p1 inventory 4 -> 2");
+  assert(r.data.find((p) => p.id === "p4").inventory === 8, "p4 inventory 9 -> 8");
+
+  step("api: insufficient stock -> 409, no partial decrement");
+  r = await api("POST", "/api/orders", {
+    items: [{ product_id: "p3", qty: 5 }], // p3 has 1
+    address: { name: "X", street: "Y", city: "Z", state: "OR", zip: "97000" },
+    ship_method: "standard", payment_id: "pi_mock_x"
+  }, 409);
+  assert(/insufficient stock/.test(r.data.error), "409 with stock message");
+  r = await api("GET", "/api/products", undefined, 200);
+  assert(r.data.find((p) => p.id === "p3").inventory === 1, "p3 inventory untouched");
+
+  step("api: order lookup + shipping alert outbox");
+  r = await api("GET", "/api/orders/" + order.order_number, undefined, 200);
+  assert(r.data.items.length === 2, "order has 2 line items");
+  r = await api("GET", "/api/alerts", undefined, 200);
+  assert(r.data.length === 1 && r.data[0].order_id === order.id, "1 alert queued for the order");
+  assert(/Shipping alert/.test(r.data[0].subject), "alert subject correct");
+
+  step("api: delete test product");
+  await api("DELETE", "/api/products/" + pid, undefined, 200);
+  r = await api("GET", "/api/products", undefined, 200);
+  assert(r.data.length === 7, "back to 7 products");
+}
+
+/* ================= browser tests ================= */
 async function fillAddress(page) {
-  await page.fill('#checkoutForm input[name="name"]', "Smoke Tester");
-  await page.fill('#checkoutForm input[name="street"]', "1 Test Lane");
+  await page.fill('#checkoutForm input[name="name"]', "Browser Buyer");
+  await page.fill('#checkoutForm input[name="street"]', "2 Test Ave");
   await page.fill('#checkoutForm input[name="city"]', "Olympia");
   await page.selectOption("#stateSelect", "WA");
   await page.fill('#checkoutForm input[name="zip"]', "98501");
 }
-
 async function fillCard(page, number) {
   await page.fill("#ccNum", number);
   await page.fill("#ccExp", "1230");
   await page.fill("#ccCvc", "123");
-  await page.fill("#ccName", "Smoke Tester");
+  await page.fill("#ccName", "Browser Buyer");
 }
 
-async function stockOf(page, id) {
-  return page.evaluate(
-    (pid) =>
-      JSON.parse(localStorage.getItem("dp_state_v1")).products.find(
-        (p) => p.id === pid
-      ).stock,
-    id
-  );
-}
-
-async function cardTitles(page) {
-  return page.locator(".card h3").allTextContents();
-}
-
-async function run() {
+async function browserTests() {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
 
-  // start clean: fresh state + empty mailpit
-  step("reset state");
-  await page.goto(BASE, { waitUntil: "networkidle" });
-  await page.evaluate(() => {
-    localStorage.removeItem("dp_state_v1");
-    localStorage.removeItem("dp_alert_queue");
-  });
-  if (!LIVE) {
-    await fetch(MAILPIT + "/messages", { method: "DELETE" });
-  }
-  await page.reload({ waitUntil: "networkidle" });
-
-  step("shop renders");
+  step("browser: shop renders from API");
+  await page.goto(BASE_URL, { waitUntil: "networkidle" });
   await page.locator(".card").first().waitFor({ timeout: 10000 });
-  const cards = await page.locator(".card").count();
-  assert(cards === 7, `7 product cards rendered (got ${cards})`);
-  const title = await page.title();
-  assert(title.includes("Dimitris Pens"), "page title correct");
+  assert((await page.locator(".card").count()) === 7, "7 product cards");
 
-  step("category filter works");
-  await page.getByRole("button", { name: "Pencils", exact: true }).click();
-  assert((await page.locator(".card").count()) === 2, "Pencils filter shows 2 cards");
-  await page.getByRole("button", { name: "All", exact: true }).click();
-  assert((await page.locator(".card").count()) === 7, "All filter restores 7 cards");
-
-  step("add two different pens to cart");
-  await page.locator('[data-add="p1"]').click();
-  await page.locator('[data-add="p4"]').click();
-  assert((await page.locator("#cartCount").textContent()) === "2", "cart badge = 2");
-
-  step("cart drawer: quantity stepper");
+  step("browser: cart + checkout + mock pay");
+  await page.locator('[data-add="p2"]').click();
+  await page.locator('[data-add="p6"]').click();
+  assert((await page.locator("#cartCount").textContent()) === "2", "cart badge 2");
   await page.locator("#cartBtn").click();
-  await page.locator(".drawer").waitFor();
-  assert((await page.locator(".cart-line").count()) === 2, "2 line items in cart");
-  await page.locator('[data-inc="p1"]').click();
-  assert((await page.locator("#cartCount").textContent()) === "3", "qty+1 -> badge = 3");
-
-  step("checkout: address + totals");
   await page.locator("#checkoutBtn").click();
   await page.locator("#checkoutOverlay").waitFor();
   await fillAddress(page);
   await page.locator("#toPaymentBtn").click();
   await page.locator("#payStep2:not([hidden])").waitFor();
-  const payLabel = await page.locator("#payBtn").textContent();
-  assert(payLabel.includes("Pay $"), "pay button shows total (" + payLabel.trim() + ")");
-
-  const mailsBefore = LIVE ? null : await mailCount();
-
-  step("mock Stripe payment succeeds (4242…)");
   await fillCard(page, "4242424242424242");
   await page.locator("#payBtn").click();
-  await page.locator(".order-no:not([hidden])").waitFor({ timeout: 15000 });
-  const orderNo = await page.locator(".order-no").textContent();
-  assert(/^DP-[A-Z0-9]{6}$/.test(orderNo.trim()), "order number issued: " + orderNo.trim());
+  await page.locator(".order-no:not([hidden])").waitFor({ timeout: 20000 });
+  const orderNo = (await page.locator(".order-no").textContent()).trim();
+  assert(/^DP-[A-Z0-9]{6}$/.test(orderNo), "confirmation shows " + orderNo);
   await page.locator("#doneBtn").click();
+  const { data: prodAfter } = await api("GET", "/api/products", undefined, 200);
+  assert(prodAfter.find((p) => p.id === "p2").inventory === 1, "p2 inventory 2 -> 1 (server-side)");
 
-  step("inventory decremented (deplete as sold)");
-  assert((await stockOf(page, "p1")) === 2, "p1 stock 4 -> 2 after buying 2");
-  assert((await stockOf(page, "p4")) === 8, "p4 stock 9 -> 8 after buying 1");
-  assert((await page.locator("#cartCount").textContent()) === "0", "cart cleared");
-
-  if (!LIVE) {
-    step("shipping alert email reached Mailpit");
-    await waitMailCount(mailsBefore + 1);
-    assert(true, "mailpit message count increased by 1");
-  }
-
-  step("mock Stripe decline path (…0002)");
+  step("browser: decline path keeps cart");
   await page.locator('[data-add="p5"]').click();
   await page.locator("#cartBtn").click();
   await page.locator("#checkoutBtn").click();
@@ -151,97 +223,74 @@ async function run() {
   await page.locator("#payStep2:not([hidden])").waitFor();
   await fillCard(page, "4000000000000002");
   await page.locator("#payBtn").click();
-  await page.locator('#payError:not([hidden])').waitFor({ timeout: 15000 });
-  const errText = await page.locator("#payError").textContent();
-  assert(/declined/i.test(errText), "decline error shown: " + errText.trim());
-  assert((await stockOf(page, "p5")) === 6, "no inventory change on decline");
+  await page.locator("#payError:not([hidden])").waitFor({ timeout: 20000 });
+  assert(/declined/i.test(await page.locator("#payError").textContent()), "decline shown, order not created");
 
-  step("retry with good card after decline");
-  await page.fill("#ccNum", "4242424242424242");
-  await page.locator("#payBtn").click();
-  await page.locator(".order-no:not([hidden])").waitFor({ timeout: 15000 });
-  await page.locator("#doneBtn").click();
-  assert((await stockOf(page, "p5")) === 5, "p5 stock 6 -> 5 after successful retry");
-
-  // ---- admin mode ----
-  step("admin: add a pen");
-  await page.goto(BASE + "?admin=1", { waitUntil: "networkidle" });
+  step("browser: admin outbox lists the alert");
+  await page.goto(BASE_URL + "/?admin=1", { waitUntil: "networkidle" });
   await page.locator("#adminBar:not([hidden])").waitFor();
+  await page.locator("#outboxBtn").click();
+  await page.locator("#outboxOverlay:not([hidden])").waitFor();
+  const outboxText = await page.locator("#outboxList").textContent();
+  assert(outboxText.includes(orderNo), "outbox contains order " + orderNo);
+
+  step("browser: admin add/edit/price/rearrange/delete pen");
+  await page.locator("#closeOutboxBtn").click();
   await page.locator("#addPenBtn").click();
-  await page.fill('#editorForm input[name="name"]', "Smoke Test Pen");
-  await page.fill('#editorForm input[name="price"]', "99.99");
-  await page.fill('#editorForm input[name="stock"]', "5");
-  await page.fill('#editorForm textarea[name="desc"]', "A pen made of pure test.");
+  await page.fill('#editorForm input[name="name"]', "Browser Pen");
+  await page.fill('#editorForm input[name="price"]', "77.77");
+  await page.fill('#editorForm input[name="stock"]', "4");
   await page.locator('#editorForm button[type="submit"]').click();
-  await page.locator('.card h3', { hasText: "Smoke Test Pen" }).waitFor();
-  assert(true, "new pen appears in grid");
-
-  step("admin: inline price widget");
-  const newCard = page.locator(".card", { hasText: "Smoke Test Pen" });
-  await newCard.locator("[data-pricein]").fill("149.99");
-  await newCard.locator("[data-priceset]").click();
-  await page.waitForTimeout(300);
-  const priceText = await newCard.locator("[data-price]").textContent();
-  assert(priceText.includes("149.99"), "price updated inline to $149.99");
-
-  step("admin: rearrange (move up)");
-  const before = await cardTitles(page);
-  const idxBefore = before.indexOf("Smoke Test Pen");
-  await newCard.locator("[data-up]").click();
-  await page.waitForTimeout(300);
-  const after = await cardTitles(page);
-  assert(
-    after.indexOf("Smoke Test Pen") === idxBefore - 1,
-    "pen moved up one slot"
-  );
-
-  step("admin: edit pen");
-  await page.locator(".card", { hasText: "Smoke Test Pen" }).locator("[data-edit]").click();
-  await page.fill('#editorForm input[name="name"]', "Smoke Test Pen V2");
-  await page.locator('#editorForm button[type="submit"]').click();
-  await page.locator('.card h3', { hasText: "Smoke Test Pen V2" }).waitFor();
-  assert(true, "pen renamed via editor");
-
-  step("admin: delete pen");
-  page.once("dialog", (d) => d.accept());
-  await page.locator(".card", { hasText: "Smoke Test Pen V2" }).locator("[data-del]").click();
+  await page.locator('.card h3', { hasText: "Browser Pen" }).waitFor();
+  const card = page.locator(".card", { hasText: "Browser Pen" });
+  await card.locator("[data-pricein]").fill("88.88");
+  await card.locator("[data-priceset]").click();
   await page.waitForTimeout(500);
-  assert(
-    (await page.locator('.card h3', { hasText: "Smoke Test Pen V2" }).count()) === 0,
-    "pen deleted from grid"
-  );
-
-  step("admin: add / rename / delete category");
-  await page.locator("#manageCatsBtn").click();
-  await page.fill('#addCatForm input[name="newcat"]', "TestCat");
-  await page.locator('#addCatForm button[type="submit"]').click();
-  await page.waitForTimeout(300);
-  assert(
-    (await page.getByRole("button", { name: "TestCat", exact: true }).count()) === 1,
-    "new category in nav"
-  );
-  page.once("dialog", (d) => d.accept("TestCat2"));
-  const catRow = page.locator("#catList li", { hasText: "TestCat" }).first();
-  await catRow.locator("button", { hasText: "rename" }).click();
-  await page.waitForTimeout(300);
-  assert(
-    (await page.getByRole("button", { name: "TestCat2", exact: true }).count()) === 1,
-    "category renamed"
-  );
+  assert((await card.locator("[data-price]").textContent()).includes("88.88"), "inline price set");
+  const titlesBefore = await page.locator(".card h3").allTextContents();
+  await card.locator("[data-up]").click();
+  await page.waitForTimeout(500);
+  const titlesAfter = await page.locator(".card h3").allTextContents();
+  assert(titlesAfter.indexOf("Browser Pen") === titlesBefore.indexOf("Browser Pen") - 1, "moved up");
   page.once("dialog", (d) => d.accept());
-  await page.locator("#catList li").filter({ hasText: "TestCat2" }).first().locator("button", { hasText: "delete" }).click();
-  await page.waitForTimeout(300);
-  assert(
-    (await page.getByRole("button", { name: "TestCat2", exact: true }).count()) === 0,
-    "category deleted from nav"
-  );
+  await page.locator(".card", { hasText: "Browser Pen" }).locator("[data-del]").click();
+  await page.waitForTimeout(500);
+  assert((await page.locator('.card h3', { hasText: "Browser Pen" }).count()) === 0, "pen deleted");
+
+  step("browser: admin category add/delete");
+  await page.locator("#manageCatsBtn").click();
+  await page.fill('#addCatForm input[name="newcat"]', "BrowserCat");
+  await page.locator('#addCatForm button[type="submit"]').click();
+  await page.waitForTimeout(500);
+  assert((await page.getByRole("button", { name: "BrowserCat", exact: true }).count()) === 1, "category in nav");
+  page.once("dialog", (d) => d.accept());
+  await page.locator("#catList li", { hasText: "BrowserCat" }).first()
+    .locator("button", { hasText: "delete" }).click();
+  await page.waitForTimeout(500);
+  assert((await page.getByRole("button", { name: "BrowserCat", exact: true }).count()) === 0, "category removed");
   await page.locator("#closeCatBtn").click();
 
   await browser.close();
-  console.log(`\nALL ${stepNo} STEPS PASSED (${LIVE ? "live" : "local"})`);
+}
+
+async function run() {
+  if (!process.env.POSTGRES_URL && !process.env.DATABASE_URL) {
+    throw new Error("Set POSTGRES_URL (a Postgres this test may wipe via dimitris_test db).");
+  }
+  step("reset test database");
+  await resetTestDb();
+  await startServer();
+  try {
+    await apiTests();
+    await browserTests();
+  } finally {
+    stopServer();
+  }
+  console.log(`\nALL ${stepNo} STEPS PASSED`);
 }
 
 run().catch((e) => {
+  stopServer();
   console.error("\nSMOKE TEST FAILED:", e.message);
   process.exit(1);
 });

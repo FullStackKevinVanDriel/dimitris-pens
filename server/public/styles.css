@@ -308,21 +308,16 @@ footer { text-align: center; padding: 0 20px 40px; color: var(--ink-soft); font-
 .cat-list input { width: 160px; padding: 5px 8px; border: 1px solid var(--rule); font-size: 13px; }
 .cat-list .mini-btns button { background: none; border: 1px solid var(--rule); font-size: 12px; padding: 3px 8px; margin-left: 6px; cursor: pointer; }
 .cat-list .mini-btns button:hover { border-color: var(--ink); }
+.cat-list details { margin-top: 6px; }
+.cat-list summary { cursor: pointer; font-size: 12px; color: var(--ink-soft); }
+.cat-list pre {
+  white-space: pre-wrap; font-size: 12px; background: var(--paper-deep);
+  border: 1px solid var(--rule); padding: 8px; margin: 6px 0 0;
+  font-family: "Courier New", Courier, monospace;
+}
 .inline-form { display: flex; gap: 8px; }
 .inline-form input { flex: 1; border: 1px solid var(--rule); padding: 8px 10px; font-size: 14px; background: #fffdf8; }
 .inline-form button { background: var(--ink); color: var(--paper); border: none; padding: 8px 16px; cursor: pointer; }
-
-/* ---------- Pending shipping alerts (admin) ---------- */
-.alert-queue {
-  border: 1px dashed var(--brass);
-  padding: 12px 16px; margin-bottom: 22px;
-}
-.alert-queue h3 {
-  margin: 0 0 4px;
-  font-family: Georgia, "Times New Roman", serif;
-  font-weight: 400; font-size: 18px;
-}
-.alert-queue .cat-list { margin-bottom: 0; }
 
 /* ---------- Mock-Stripe payment step ---------- */
 .testmode-badge {
