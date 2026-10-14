@@ -98,19 +98,39 @@ async function seed(client) {
   console.log("seeded catalog:", SEED_CATS.length, "categories,", SEED_PRODUCTS.length, "products");
 }
 
-const ready = (async () => {
-  const schema = fs.readFileSync(path.join(__dirname, "schema.sql"), "utf8");
-  const client = await pool.connect();
-  try {
-    await client.query(schema);
-    await seed(client);
-    await encryptPII(client);
-  } finally {
-    client.release();
+// Schema + seed + PII backfill. Serverless cold starts can run this on
+// several instances at once, so it's serialized with an advisory lock and
+// done in one transaction. A failure (e.g. Neon waking from sleep) is not
+// cached: the next call retries instead of failing the instance forever.
+const INIT_LOCK = 4242001;
+let initPromise = null;
+function init() {
+  if (!initPromise) {
+    initPromise = (async () => {
+      const schema = fs.readFileSync(path.join(__dirname, "schema.sql"), "utf8");
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query("SELECT pg_advisory_xact_lock($1)", [INIT_LOCK]);
+        await client.query(schema);
+        await seed(client);
+        await encryptPII(client);
+        await client.query("COMMIT");
+      } catch (e) {
+        await client.query("ROLLBACK").catch(() => {});
+        throw e;
+      } finally {
+        client.release();
+      }
+    })().catch((err) => {
+      console.error("DB init failed:", err.message);
+      initPromise = null;
+      throw err;
+    });
   }
-})().catch((err) => {
-  console.error("DB init failed:", err.message);
-  throw err;
-});
+  return initPromise;
+}
+const ready = init();
+ready.catch(() => {}); // callers that care await init() themselves
 
-module.exports = { pool, uid, ready, PII_COLUMNS };
+module.exports = { pool, uid, ready, init, PII_COLUMNS };
