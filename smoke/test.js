@@ -19,6 +19,7 @@ const { chromium } = require("playwright");
 const { Client } = require("pg");
 const crypto = require("crypto");
 const { hashPassword } = require("../server/password");
+const { migrate } = require("../scripts/migrate");
 
 const ADMIN_PASSWORD = "smoke-test-password-123";
 const SECRETS = {
@@ -65,14 +66,48 @@ function testDbUrl() {
   return u.toString();
 }
 
-async function resetTestDb() {
+function dbUrl(name) {
+  const u = new URL(process.env.POSTGRES_URL || process.env.DATABASE_URL);
+  u.pathname = "/" + name;
+  return u.toString();
+}
+
+async function resetDb(name) {
   const admin = new Client({ connectionString: process.env.POSTGRES_URL || process.env.DATABASE_URL });
   await admin.connect();
   // terminate stray connections so DROP works
-  await admin.query(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='dimitris_test' AND pid <> pg_backend_pid()`);
-  await admin.query("DROP DATABASE IF EXISTS dimitris_test");
-  await admin.query("CREATE DATABASE dimitris_test");
+  await admin.query(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid <> pg_backend_pid()`, [name]);
+  await admin.query(`DROP DATABASE IF EXISTS ${name}`);
+  await admin.query(`CREATE DATABASE ${name}`);
   await admin.end();
+}
+const resetTestDb = () => resetDb("dimitris_test");
+
+/* ================= migration tests ================= */
+async function migrationTests() {
+  step("migrations: fresh database");
+  let done = await migrate("up", { databaseUrl: testDbUrl(), quiet: true });
+  assert(done.map((m) => m.name).join(",") === "001_baseline,002_seed_catalog", "applied 001_baseline, 002_seed_catalog");
+  done = await migrate("up", { databaseUrl: testDbUrl(), quiet: true });
+  assert(done.length === 0, "second run is a no-op");
+
+  step("migrations: adopt a database built by the old boot-time schema");
+  // Simulate production before this change: tables created by schema.sql on
+  // boot, real data in them, no pgmigrations table.
+  await resetDb("dimitris_legacy");
+  const legacyUrl = dbUrl("dimitris_legacy");
+  const sql = require("fs").readFileSync(require("path").join(__dirname, "..", "migrations", "001_baseline.sql"), "utf8");
+  const legacy = new Client({ connectionString: legacyUrl });
+  await legacy.connect();
+  await legacy.query(sql.split("-- Down Migration")[0]);
+  await legacy.query("INSERT INTO categories (id, name) VALUES ('live1', 'Live Category')");
+  await legacy.query("INSERT INTO products (id, name, price_cents, category_id) VALUES ('live-p', 'Live Pen', 100, 'live1')");
+  done = await migrate("up", { databaseUrl: legacyUrl, quiet: true });
+  assert(done.length === 2, "both migrations recorded on the existing database");
+  const { rows } = await legacy.query("SELECT (SELECT COUNT(*)::int FROM categories) AS c, (SELECT COUNT(*)::int FROM products) AS p");
+  assert(rows[0].c === 1 && rows[0].p === 1, "existing data kept, seed skipped (shop not empty)");
+  await legacy.end();
+  await resetDb("dimitris_legacy"); // leave nothing behind
 }
 
 let serverProc = null;
@@ -419,6 +454,7 @@ async function run() {
   }
   step("reset test database");
   await resetTestDb();
+  await migrationTests();
   await startServer();
   try {
     await apiTests();
