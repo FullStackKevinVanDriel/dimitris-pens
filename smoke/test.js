@@ -6,6 +6,10 @@
  *
  *   POSTGRES_URL=postgres://postgres:penstest@localhost:5432/postgres node smoke/test.js
  *
+ * Watch it in real Chrome:  SMOKE_CHANNEL=chrome SMOKE_HEADED=1 (npm run smoke:chrome)
+ * The server gets throwaway secrets (test admin password + random PII key),
+ * so no .env is needed.
+ *
  * Fails loudly: any failed assertion throws and exits non-zero.
  */
 "use strict";
@@ -13,6 +17,15 @@
 const { spawn } = require("child_process");
 const { chromium } = require("playwright");
 const { Client } = require("pg");
+const crypto = require("crypto");
+const { hashPassword } = require("../server/password");
+
+const ADMIN_PASSWORD = "smoke-test-password-123";
+const SECRETS = {
+  ADMIN_PASSWORD_HASH: hashPassword(ADMIN_PASSWORD),
+  PII_ENC_KEY: crypto.randomBytes(32).toString("base64"),
+  COOKIE_SECURE: "false"
+};
 
 const BASE_URL = process.env.SMOKE_BASE || "http://localhost:3001";
 const PORT = process.env.SMOKE_PORT || "3001";
@@ -23,12 +36,21 @@ function assert(cond, msg) {
   if (!cond) throw new Error("ASSERT FAILED: " + msg);
   console.log("  ok — " + msg);
 }
-async function api(method, path, body, expectStatus) {
+// Tiny cookie jar: holds the admin session cookie once logged in.
+let adminCookie = null;
+let lastSetCookie = "";
+async function api(method, path, body, expectStatus, opts = {}) {
+  const headers = { "Content-Type": "application/json" };
+  if (adminCookie && !opts.anon) headers.Cookie = adminCookie;
+  Object.assign(headers, opts.headers || {});
   const r = await fetch(BASE_URL + path, {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: body === undefined ? undefined : JSON.stringify(body)
   });
+  const setCookie = r.headers.get("set-cookie");
+  if (setCookie) lastSetCookie = setCookie;
+  if (setCookie && !opts.anon) adminCookie = setCookie.split(";")[0];
   const data = await r.json().catch(() => ({}));
   if (expectStatus !== undefined && r.status !== expectStatus) {
     throw new Error(`ASSERT FAILED: ${method} ${path} -> ${r.status}, expected ${expectStatus} (${JSON.stringify(data)})`);
@@ -54,7 +76,7 @@ async function resetTestDb() {
 
 let serverProc = null;
 async function startServer() {
-  const env = { ...process.env, POSTGRES_URL: testDbUrl(), PORT };
+  const env = { ...process.env, ...SECRETS, POSTGRES_URL: testDbUrl(), PORT };
   delete env.DATABASE_URL;
   serverProc = spawn("node", ["server/index.js"], { env, stdio: ["ignore", "pipe", "pipe"] });
   serverProc.stdout.on("data", (d) => process.stdout.write("[srv] " + d));
@@ -82,6 +104,55 @@ async function apiTests() {
   assert(p1.name === "The Meridian" && p1.price_cents === 18500, "p1 seed correct");
   r = await api("GET", "/api/categories", undefined, 200);
   assert(r.data.length === 3, "3 seeded categories");
+
+  step("security: admin endpoints require login");
+  const anon = { anon: true };
+  await api("POST", "/api/products", { name: "x", price_cents: 1 }, 401, anon);
+  await api("PUT", "/api/products/p1", { price_cents: 1 }, 401, anon);
+  await api("DELETE", "/api/products/p1", undefined, 401, anon);
+  await api("PUT", "/api/products/reorder", { order: [] }, 401, anon);
+  await api("POST", "/api/categories", { name: "x" }, 401, anon);
+  await api("DELETE", "/api/categories/c1", undefined, 401, anon);
+  await api("PUT", "/api/settings", { shop_name: "pwned" }, 401, anon);
+  await api("GET", "/api/orders", undefined, 401, anon);
+  await api("GET", "/api/orders/anything", undefined, 401, anon);
+  await api("GET", "/api/alerts", undefined, 401, anon);
+  await api("GET", "/api/admin/settings", undefined, 401, anon);
+  assert(true, "all admin routes -> 401 without a session");
+  await api("POST", "/api/admin/login", { password: "wrong" }, 401, anon);
+  assert(true, "wrong password -> 401");
+  r = await api("GET", "/api/admin/session", undefined, 200);
+  assert(r.data.admin === false, "no session yet");
+  r = await fetch(BASE_URL + "/api/health");
+  assert(/default-src 'self'/.test(r.headers.get("content-security-policy") || ""), "CSP header set");
+  r = await api("POST", "/api/admin/login", { password: ADMIN_PASSWORD }, 200);
+  assert(adminCookie.startsWith("dp_admin=") && /HttpOnly/i.test(lastSetCookie) && /SameSite=Strict/i.test(lastSetCookie),
+    "logged in, HttpOnly SameSite=Strict session cookie set");
+  r = await api("GET", "/api/admin/session", undefined, 200);
+  assert(r.data.admin === true, "session recognized");
+  await api("POST", "/api/categories", { name: "x" }, 403, { headers: { Origin: "https://evil.example" } });
+  assert(true, "cross-origin admin write -> 403");
+
+  step("security: image uploads are validated");
+  await api("POST", "/api/products", { name: "x", price_cents: 1, image_data_url: '" onerror="alert(1)' }, 422);
+  await api("POST", "/api/products", { name: "x", price_cents: 1, image_data_url: "data:image/svg+xml;base64,PHN2Zy8+" }, 422);
+  await api("POST", "/api/products", { name: "x", price_cents: 1, image_key: "<script>" }, 422);
+  assert(true, "attribute-injection, SVG and unknown icon rejected (422)");
+
+  step("settings: public/private split, validation, update");
+  r = await api("GET", "/api/settings", undefined, 200, anon);
+  assert(r.data.values.shop_name === "Dimitris Pens", "default shop name");
+  assert(!("alert_recipient" in r.data.values), "private alert_recipient not public");
+  await api("PUT", "/api/settings", { color_accent: "red; background:url(x)" }, 422);
+  await api("PUT", "/api/settings", { nope: 1 }, 422);
+  assert(true, "bad color + unknown key rejected");
+  r = await api("PUT", "/api/settings", { tagline: "Smoke tagline", ship_standard_cents: 795 }, 200);
+  assert(r.data.values.tagline === "Smoke tagline", "tagline updated");
+  r = await api("GET", "/api/admin/settings", undefined, 200);
+  assert(r.data.values.alert_recipient && r.data.values.ship_standard_cents === 795, "admin sees private + updated values");
+  await api("PUT", "/api/settings", { tagline: null, ship_standard_cents: null }, 200);
+  r = await api("GET", "/api/settings", undefined, 200, anon);
+  assert(r.data.values.ship_standard_cents === 695, "null resets to default");
 
   step("api: product CRUD");
   r = await api("POST", "/api/products", {
@@ -128,16 +199,23 @@ async function apiTests() {
   step("api: order creates, decrements inventory, server-side totals");
   // p1 x2 @18500 + p4 x1 @8500 = 45500 subtotal; WA tax 6.5% = 2958 (rounded);
   // subtotal >= $75 -> FREE standard shipping; total = 48458
+  const orderItems = [{ product_id: "p1", qty: 2 }, { product_id: "p4", qty: 1 }];
+  r = await api("POST", "/api/orders/quote", { items: orderItems, state: "WA", ship_method: "standard" }, 200);
+  assert(r.data.total_cents === 48458, "quote total 48458");
+  const buyer = { name: "Api Buyer", street: "1 Test Ln", city: "Olympia", state: "WA", zip: "98501" };
+  await api("POST", "/api/orders", { items: orderItems, address: buyer, payment_id: "pi_mock_forged" }, 402);
+  assert(true, "forged payment id -> 402");
+  r = await api("POST", "/api/payments/mock", { amount_cents: 100, card: { number: "4242424242424242" } }, 200);
+  await api("POST", "/api/orders", { items: orderItems, address: buyer, payment_id: r.data.id }, 409);
+  assert(true, "underpaid order -> 409");
   r = await api("POST", "/api/payments/mock",
     { amount_cents: 48458, card: { number: "4242424242424242" } }, 200);
   const payId = r.data.id;
   r = await api("POST", "/api/orders", {
-    items: [{ product_id: "p1", qty: 2 }, { product_id: "p4", qty: 1 }],
-    address: { name: "Api Buyer", street: "1 Test Ln", city: "Olympia", state: "WA", zip: "98501" },
-    ship_method: "standard", payment_id: payId
+    items: orderItems, address: buyer, ship_method: "standard", payment_id: payId
   }, 201);
   const order = r.data.order;
-  assert(/^DP-[A-Z0-9]{6}$/.test(order.order_number), "order number: " + order.order_number);
+  assert(/^DP-[A-Z0-9]{8}$/.test(order.order_number), "order number: " + order.order_number);
   assert(order.subtotal_cents === 45500, "subtotal 45500");
   assert(order.tax_cents === 2958, "WA tax 2958 (server-computed)");
   assert(order.shipping_cents === 0, "free shipping over $75 (server-computed)");
@@ -146,6 +224,20 @@ async function apiTests() {
   r = await api("GET", "/api/products", undefined, 200);
   assert(r.data.find((p) => p.id === "p1").inventory === 2, "p1 inventory 4 -> 2");
   assert(r.data.find((p) => p.id === "p4").inventory === 8, "p4 inventory 9 -> 8");
+  await api("POST", "/api/orders", { items: [{ product_id: "p6", qty: 1 }], address: buyer, payment_id: payId }, 409);
+  assert(true, "payment reuse -> 409");
+
+  step("security: customer PII encrypted at rest");
+  const db = new Client({ connectionString: testDbUrl() });
+  await db.connect();
+  const { rows: raw } = await db.query("SELECT * FROM orders WHERE id = $1", [order.id]);
+  for (const c of ["customer_name", "street", "city", "zip"])
+    assert(raw[0][c].startsWith("enc:v1:") && !raw[0][c].includes(buyer[c === "customer_name" ? "name" : c]), c + " stored encrypted");
+  const { rows: rawAlert } = await db.query("SELECT body FROM shipping_alerts WHERE order_id = $1", [order.id]);
+  assert(rawAlert[0].body.startsWith("enc:v1:") && !rawAlert[0].body.includes("Api Buyer"), "alert body stored encrypted");
+  const { rows: tokens } = await db.query("SELECT token_hash FROM admin_sessions");
+  assert(tokens.every((t) => !adminCookie.includes(t.token_hash)), "session token stored hashed only");
+  await db.end();
 
   step("api: insufficient stock -> 409, no partial decrement");
   r = await api("POST", "/api/orders", {
@@ -160,9 +252,11 @@ async function apiTests() {
   step("api: order lookup + shipping alert outbox");
   r = await api("GET", "/api/orders/" + order.order_number, undefined, 200);
   assert(r.data.items.length === 2, "order has 2 line items");
+  assert(r.data.customer_name === "Api Buyer" && r.data.zip === "98501", "admin read decrypts PII");
   r = await api("GET", "/api/alerts", undefined, 200);
   assert(r.data.length === 1 && r.data[0].order_id === order.id, "1 alert queued for the order");
   assert(/Shipping alert/.test(r.data[0].subject), "alert subject correct");
+  assert(r.data[0].body.includes("Api Buyer"), "alert body decrypted for admin");
 
   step("api: delete test product");
   await api("DELETE", "/api/products/" + pid, undefined, 200);
@@ -186,8 +280,16 @@ async function fillCard(page, number) {
 }
 
 async function browserTests() {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({
+    headless: !process.env.SMOKE_HEADED,
+    channel: process.env.SMOKE_CHANNEL || undefined, // "chrome" = installed Google Chrome
+    slowMo: process.env.SMOKE_HEADED ? 150 : 0
+  });
   const page = await browser.newPage();
+  const pageErrors = [];
+  page.on("pageerror", (e) => pageErrors.push(e.message));
+  page.on("console", (m) => { // HTTP error statuses (401/402 declines, favicon 404) are expected; CSP + JS errors are not.
+    if (m.type() === "error" && !/Failed to load resource/.test(m.text())) pageErrors.push(m.text()); });
 
   step("browser: shop renders from API");
   await page.goto(BASE_URL, { waitUntil: "networkidle" });
@@ -208,7 +310,7 @@ async function browserTests() {
   await page.locator("#payBtn").click();
   await page.locator(".order-no:not([hidden])").waitFor({ timeout: 20000 });
   const orderNo = (await page.locator(".order-no").textContent()).trim();
-  assert(/^DP-[A-Z0-9]{6}$/.test(orderNo), "confirmation shows " + orderNo);
+  assert(/^DP-[A-Z0-9]{8}$/.test(orderNo), "confirmation shows " + orderNo);
   await page.locator("#doneBtn").click();
   const { data: prodAfter } = await api("GET", "/api/products", undefined, 200);
   assert(prodAfter.find((p) => p.id === "p2").inventory === 1, "p2 inventory 2 -> 1 (server-side)");
@@ -226,13 +328,23 @@ async function browserTests() {
   await page.locator("#payError:not([hidden])").waitFor({ timeout: 20000 });
   assert(/declined/i.test(await page.locator("#payError").textContent()), "decline shown, order not created");
 
-  step("browser: admin outbox lists the alert");
+  step("browser: admin requires password");
   await page.goto(BASE_URL + "/?admin=1", { waitUntil: "networkidle" });
+  await page.locator("#loginOverlay:not([hidden])").waitFor();
+  assert(await page.locator("#adminBar").isHidden(), "no admin bar before login");
+  await page.fill("#loginPassword", "not-the-password");
+  await page.locator("#loginBtn").click();
+  await page.locator("#loginError:not([hidden])").waitFor();
+  assert(/wrong password/.test(await page.locator("#loginError").textContent()), "wrong password rejected");
+  await page.fill("#loginPassword", ADMIN_PASSWORD);
+  await page.locator("#loginBtn").click();
   await page.locator("#adminBar:not([hidden])").waitFor();
+  assert(true, "logged in via UI");
+
+  step("browser: admin outbox lists the alert");
   await page.locator("#outboxBtn").click();
-  await page.locator("#outboxOverlay:not([hidden])").waitFor();
-  const outboxText = await page.locator("#outboxList").textContent();
-  assert(outboxText.includes(orderNo), "outbox contains order " + orderNo);
+  await page.locator("#outboxList li", { hasText: orderNo }).waitFor();
+  assert(true, "outbox contains order " + orderNo);
 
   step("browser: admin add/edit/price/rearrange/delete pen");
   await page.locator("#closeOutboxBtn").click();
@@ -269,6 +381,33 @@ async function browserTests() {
   await page.waitForTimeout(500);
   assert((await page.getByRole("button", { name: "BrowserCat", exact: true }).count()) === 0, "category removed");
   await page.locator("#closeCatBtn").click();
+
+  step("browser: site settings change page text + theme");
+  await page.locator("#settingsBtn").click();
+  await page.locator("#settingsOverlay:not([hidden])").waitFor();
+  await page.fill('#settingsForm input[name="shop_name"]', "Smoke Pens Co.");
+  await page.fill('#settingsForm input[name="announcement"]', "Holiday orders ship Dec 20");
+  await page.fill('#settingsForm textarea[name="about_body"]', "First paragraph.\n\nSecond paragraph.");
+  await page.locator('#settingsForm input[name="color_accent"]').fill("#1f4e79");
+  await page.locator("#saveSettingsBtn").click();
+  await page.locator("#settingsOverlay").waitFor({ state: "hidden" });
+  assert((await page.locator("#shopName").textContent()) === "Smoke Pens Co.", "shop name updated");
+  assert((await page.locator("#announcement").textContent()) === "Holiday orders ship Dec 20", "announcement shown");
+  assert((await page.locator("#aboutBody p").count()) === 2, "about split into 2 paragraphs");
+  const accent = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--accent").trim());
+  assert(accent === "#1f4e79", "accent color applied");
+  await page.reload({ waitUntil: "networkidle" });
+  assert((await page.locator("#shopName").textContent()) === "Smoke Pens Co.", "persists across reload (server-side)");
+  assert(await page.locator("#adminBar").isVisible(), "admin session survives reload");
+
+  step("browser: logout");
+  await page.locator("#exitAdminBtn").click();
+  await page.locator("#adminBar").waitFor({ state: "hidden" });
+  const { status } = await api("GET", "/api/alerts", undefined, undefined, { anon: true });
+  assert(status === 401, "logged out; admin API closed");
+
+  step("browser: no JS errors or CSP violations");
+  assert(pageErrors.length === 0, "clean console" + (pageErrors.length ? ": " + pageErrors.join(" | ") : ""));
 
   await browser.close();
 }

@@ -7,12 +7,13 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+<div class="announcement" id="announcement" hidden></div>
 
 <header class="masthead">
   <div class="masthead-inner">
-    <p class="est">Est. 2026 · Hand-finished</p>
-    <h1 class="shop-name">Dimitris Pens</h1>
-    <p class="tagline">Fine writing instruments, made to be kept</p>
+    <p class="est" id="estLine">Est. 2026 · Hand-finished</p>
+    <h1 class="shop-name" id="shopName">Dimitris Pens</h1>
+    <p class="tagline" id="tagline">Fine writing instruments, made to be kept</p>
   </div>
   <div class="masthead-rule"></div>
   <nav class="topnav">
@@ -29,7 +30,8 @@
     <button id="addPenBtn">+ Add pen</button>
     <button id="manageCatsBtn">Categories</button>
     <button id="outboxBtn">Outbox</button>
-    <button id="exitAdminBtn">Exit admin</button>
+    <button id="settingsBtn">Site settings</button>
+    <button id="exitAdminBtn">Log out</button>
   </div>
 
 
@@ -37,18 +39,18 @@
   <section class="grid" id="productGrid" aria-live="polite"></section>
 
   <section class="about">
-    <h2>A note from the bench</h2>
-    <p>Every pen here is turned, fitted, and polished by hand in small batches.
+    <h2 id="aboutHeading">A note from the bench</h2>
+    <div id="aboutBody"><p>Every pen here is turned, fitted, and polished by hand in small batches.
     Nibs are tuned before they ship, and each instrument leaves the shop with a
     handwritten test card. If a pen is sold out, it is gone — the next batch
-    is never quite the same.</p>
+    is never quite the same.</p></div>
   </section>
 </main>
 
 <footer>
   <div class="footer-rule"></div>
-  <p>Dimitris Pens · 412 Inkwell Lane, Olympia, WA 98501</p>
-  <p class="fineprint">All sales final on custom work. <a href="#" id="adminLink">Admin</a></p>
+  <p id="footerAddress">Dimitris Pens · 412 Inkwell Lane, Olympia, WA 98501</p>
+  <p class="fineprint"><span id="footerFineprint">All sales final on custom work.</span> <a href="#" id="adminLink">Admin</a></p>
 </footer>
 
 <!-- Cart drawer -->
@@ -84,8 +86,8 @@
           <label class="zip">ZIP <input name="zip" required pattern="[0-9]{5}(-[0-9]{4})?" autocomplete="postal-code"></label>
         </div>
         <h3>Shipping method</h3>
-        <label class="radio"><input type="radio" name="ship" value="standard" checked> Standard (5–7 days) — <span id="stdShipLabel">$6.95</span></label>
-        <label class="radio"><input type="radio" name="ship" value="express"> Express (2 days) — $14.95</label>
+        <label class="radio"><input type="radio" name="ship" value="standard" checked> <span id="stdShipName">Standard (5–7 days)</span> — <span id="stdShipLabel">$6.95</span></label>
+        <label class="radio"><input type="radio" name="ship" value="express"> <span id="expShipName">Express (2 days)</span> — <span id="expShipLabel">$14.95</span></label>
         <div class="totals" id="checkoutTotals"></div>
         <button type="button" class="primary-btn" id="toPaymentBtn">Continue to payment</button>
         </div>
@@ -190,6 +192,41 @@
       <p class="tax-note">Queued shipping alerts for paid orders. No SMTP in serverless &mdash;
       wire Resend/Postmark where the alert is queued (server/app.js) to actually send these.</p>
       <ul class="cat-list" id="outboxList"></ul>
+    </div>
+  </div>
+</div>
+
+<!-- Admin login -->
+<div class="modal-overlay" id="loginOverlay" hidden>
+  <div class="modal small" role="dialog" aria-label="Admin login">
+    <div class="drawer-head">
+      <h2>Admin login</h2>
+      <button class="icon-btn" id="closeLoginBtn" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <form id="loginForm">
+        <label>Password <input type="password" name="password" id="loginPassword" required autocomplete="current-password"></label>
+        <div class="pay-error" id="loginError" hidden></div>
+        <button type="submit" class="primary-btn" id="loginBtn">Log in</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Site settings (admin) -->
+<div class="modal-overlay" id="settingsOverlay" hidden>
+  <div class="modal" role="dialog" aria-label="Site settings">
+    <div class="drawer-head">
+      <h2>Site settings</h2>
+      <button class="icon-btn" id="closeSettingsBtn" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <form id="settingsForm">
+        <div id="settingsFields"></div>
+        <div class="pay-error" id="settingsError" hidden></div>
+        <button type="submit" class="primary-btn" id="saveSettingsBtn">Save settings</button>
+        <button type="button" class="ghost-btn" id="resetThemeBtn">Reset theme colors to default</button>
+      </form>
     </div>
   </div>
 </div>

@@ -8,27 +8,38 @@ inventory, orders, and shipping alerts all live in Postgres.
 
 ```bash
 npm install
-
-# Postgres: supply a connection string. Local option:
 docker run -d --name dp-pg -e POSTGRES_PASSWORD=penstest -p 5432:5432 postgres:16
-export POSTGRES_URL=postgres://postgres:penstest@localhost:5432/postgres
-# (or export DATABASE_URL — either works; Neon URLs auto-enable SSL)
-
-npm start
-# → http://localhost:3001  (default PORT=3001; override with PORT=...)
+npm run setup      # writes .env: asks for an admin password, generates the PII key
+npm start          # → http://localhost:3001  (admin: footer "Admin" link or /?admin=1)
 ```
 
 First boot applies `server/schema.sql` and seeds 7 pens + 3 categories.
 Prices are integer cents; tax + shipping are computed server-side.
 
-Env vars: `POSTGRES_URL` / `DATABASE_URL` (required), `PORT` (default 3001),
-`ALERT_TO` (shipping alert recipient, default `orders@dimitris-pens.local`),
-`PGSSL=true` (force TLS; auto-on for `*.neon.tech`).
+Secrets and env vars are documented in `.env.example` and `server/config.js`.
+The server refuses to start without `POSTGRES_URL`, `ADMIN_PASSWORD_HASH`
+and `PII_ENC_KEY`. To change the admin password: `npm run hash-password`.
+
+## Customizing the shop
+
+Log in as admin → **Site settings**. Everything on the page is editable there
+and stored in Postgres (`site_settings`): shop name, tagline, announcement
+banner, about text, footer, button labels, confirmation message, theme colors
+and fonts, tax rates per state, shipping prices/labels, the free-shipping
+threshold, and the shipping-alert email. Pens, prices, photos, stock, order
+and categories are edited inline on the grid. The fields are defined in
+`server/settings.js`; adding a field there makes it appear in the form.
+
+## Security
+
+Admin login protects every write and every customer-data read. Customer
+name/address is encrypted at rest (AES-256-GCM). Orders must match a real
+payment. See **docs/SECURITY.md** for the full review.
 
 ## Deploy (Vercel + Postgres)
 
-Target: Vercel free tier (serverless) + Postgres free tier via Vercel
-Marketplace/Neon — survives without any of Kevin's own machines.
+**Plan and secrets setup: docs/DEPLOYMENT.md.** (Short version: Vercel *Pro*,
+because Hobby forbids commercial use, plus Neon, with secrets in Vercel env vars.)
 
 - `api/index.js` exports the Express app for Vercel's Node runtime.
 - `vercel.json` rewrites **everything** to `/api` (one function serves the
@@ -37,27 +48,16 @@ Marketplace/Neon — survives without any of Kevin's own machines.
   static assets also run through the function; split later if it matters.
 - `server/index.js` only calls `app.listen` when run directly
   (`require.main === module`) — never in the serverless path.
-- Connect the Vercel Postgres/Neon integration and set `POSTGRES_URL`
-  (Vercel injects it automatically for the linked project). Seed runs on
-  first boot against the empty database.
+- Connect the Vercel Postgres/Neon integration (injects `POSTGRES_URL`) and
+  set `ADMIN_PASSWORD_HASH` + `PII_ENC_KEY`. Seed runs on first boot.
 
 GitHub Pages **cannot** host this app (it's full-stack now) and the Mac mini
 is not a target — Vercel is the only deployment path.
 
 ## API
 
-| Method | Path | Notes |
-|---|---|---|
-| GET | /api/health | liveness |
-| GET/POST | /api/products | POST: `{name, price_cents, category_id?, description?, inventory?, image_key?, image_data_url?}` |
-| PUT | /api/products/reorder | `{order:[ids]}` sets sort_order |
-| PUT/DELETE | /api/products/:id | partial update / delete |
-| GET/POST | /api/categories | POST `{name}` (409 on duplicate) |
-| PUT/DELETE | /api/categories/:id | |
-| GET | /api/alerts | shipping-alert outbox (admin) |
-| POST | /api/payments/mock | `{amount_cents, card:{number,…}}` — 1–2s delay, `0002` declines (402) |
-| POST | /api/orders | `{items, address, ship_method?, payment_id?}` — atomic inventory decrement (409 on short stock), server-side tax/shipping, queues shipping alert |
-| GET | /api/orders, /api/orders/:id | |
+Full route list (public vs admin) is in the header comment of `server/app.js`.
+Admin routes need the session cookie from `POST /api/admin/login`.
 
 ## Shop notes
 
@@ -71,19 +71,23 @@ is not a target — Vercel is the only deployment path.
   `shipping_alerts` (status `queued`), listed in admin → Outbox. Graduation
   path is a Resend/Postmark API call where the INSERT happens
   (`queueShippingAlert` in `server/app.js`).
-- **Admin mode**: discreet `Admin` link in the footer (or `?admin=1`).
+- **Admin mode**: discreet `Admin` link in the footer (or `?admin=1`) opens
+  a password prompt. Session lasts 8h; "Log out" in the admin bar ends it.
 
 ## Smoke test
 
 ```bash
 # needs a Postgres you don't mind being wiped (uses dimitris_test db)
-POSTGRES_URL=postgres://postgres:penstest@localhost:5432/postgres node smoke/test.js
+POSTGRES_URL=postgres://postgres:penstest@localhost:5432/postgres npm run smoke
+# same, but watch it in a real Google Chrome window:
+POSTGRES_URL=postgres://postgres:penstest@localhost:5432/postgres npm run smoke:chrome
 ```
+(`cd smoke && npm install` once for Playwright.) The test generates its own
+throwaway admin password and PII key, so no `.env` is needed.
 
-Covers the API (CRUD, reorder, duplicate-category 409, mock pay
-success/decline, order totals math, inventory decrement, insufficient-stock
-409 with no partial write, order lookup, outbox) plus a Playwright browser
-flow (shop → cart → checkout → pay → confirmation → admin outbox → admin
-CRUD/rearrange/categories). Re-run against production by setting
-`SMOKE_BASE=https://<your-vercel-url>` — but the API phase still needs a
-wipeable database, so point it at a scratch DB.
+Covers the API (auth on every admin route, CSRF origin check, upload
+validation, settings validation and public/private split, CRUD, reorder,
+mock pay, forged/underpaid/reused payments, order math, inventory, PII
+encrypted in the raw DB rows, hashed session tokens) plus the browser flow
+(shop → cart → checkout → pay → decline → admin login → outbox → pen CRUD →
+categories → site settings → logout), and fails on any JS or CSP error.

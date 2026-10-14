@@ -4,9 +4,14 @@
  */
 "use strict";
 
-const { ready } = require("./db");
-
-const PORT = parseInt(process.env.PORT || "3001", 10);
+let ready, PORT;
+try {
+  ({ ready } = require("./db"));
+  PORT = require("./config").port;
+} catch (err) {
+  console.error("failed to start:", err.message);
+  process.exit(1);
+}
 
 ready.then(() => {
   const app = require("./app");
