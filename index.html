@@ -31,6 +31,13 @@
     <button id="exitAdminBtn">Exit admin</button>
   </div>
 
+  <div class="alert-queue" id="alertQueue" hidden>
+    <h3>Pending shipping alerts <span id="alertCount"></span></h3>
+    <p class="tax-note">The local mailer (localhost:3001) was unreachable when these orders
+    were placed. Start it, then retry — or copy the details manually.</p>
+    <ul class="cat-list" id="alertList"></ul>
+  </div>
+
   <section class="grid" id="productGrid" aria-live="polite"></section>
 
   <section class="about">
