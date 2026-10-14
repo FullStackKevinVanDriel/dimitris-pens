@@ -312,6 +312,18 @@ footer { text-align: center; padding: 0 20px 40px; color: var(--ink-soft); font-
 .inline-form input { flex: 1; border: 1px solid var(--rule); padding: 8px 10px; font-size: 14px; background: #fffdf8; }
 .inline-form button { background: var(--ink); color: var(--paper); border: none; padding: 8px 16px; cursor: pointer; }
 
+/* ---------- Pending shipping alerts (admin) ---------- */
+.alert-queue {
+  border: 1px dashed var(--brass);
+  padding: 12px 16px; margin-bottom: 22px;
+}
+.alert-queue h3 {
+  margin: 0 0 4px;
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 400; font-size: 18px;
+}
+.alert-queue .cat-list { margin-bottom: 0; }
+
 /* ---------- Mock-Stripe payment step ---------- */
 .testmode-badge {
   display: inline-block;

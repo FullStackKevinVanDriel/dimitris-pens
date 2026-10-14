@@ -142,6 +142,7 @@ function renderGrid() {
   });
   if (admin) wireAdminControls(grid);
   document.getElementById("adminBar").hidden = !admin;
+  renderAlertQueue();
 }
 
 function adminControls(p) {
@@ -453,7 +454,7 @@ function completeOrder(t, paymentId) {
       var p2 = prod(c.id);
       return { name: p2.name, qty: c.qty, price: p2.price };
     }),
-    sub: t.sub, tax: t.tax, ship: t.ship, total: t.total,
+    sub: t.sub, tax: t.tax, ship: t.ship, total: t.total, shipMethod: t.method,
     shipTo: {
       name: form.name.value, street: form.street.value,
       city: form.city.value, state: t.state, zip: form.zip.value
@@ -462,6 +463,7 @@ function completeOrder(t, paymentId) {
   state.orders.push(order);
   state.cart = [];
   save();
+  sendShippingAlert(order); // fire-and-forget; queues locally if mailer is down
   document.getElementById("processing").hidden = true;
   var conf = document.getElementById("confirmation");
   conf.hidden = false;
@@ -584,6 +586,87 @@ function renderCatList() {
       save(); renderCatList(); renderCats(); renderGrid();
     });
     ul.appendChild(li);
+  });
+}
+
+/* ---------------- Shipping alerts (Mailpit backend, local dev only) ----------------
+ * On a paid order the site POSTs the order to a tiny local backend
+ * (server/mailer.js, http://localhost:3001) which emails a shipping alert
+ * through Mailpit. If the backend isn't reachable (e.g. on GitHub Pages),
+ * the alert is queued in localStorage and surfaced in admin mode — checkout
+ * itself never breaks.
+ */
+var MAILER_URL = "http://localhost:3001/api/shipping-alert";
+var QUEUE_KEY = "dp_alert_queue";
+
+function getQueue() {
+  try { return JSON.parse(localStorage.getItem(QUEUE_KEY) || "[]"); }
+  catch (e) { return []; }
+}
+function setQueue(q) { localStorage.setItem(QUEUE_KEY, JSON.stringify(q)); }
+
+function sendShippingAlert(order) {
+  var ctrl = new AbortController();
+  var timer = setTimeout(function () { ctrl.abort(); }, 3000);
+  fetch(MAILER_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ order: order }),
+    signal: ctrl.signal
+  }).then(function (r) { return r.json(); })
+    .then(function (data) {
+      clearTimeout(timer);
+      if (data && data.ok) {
+        console.log("shipping alert sent, messageId:", data.messageId);
+      } else {
+        queueAlert(order);
+      }
+    })
+    .catch(function () { clearTimeout(timer); queueAlert(order); });
+}
+
+function queueAlert(order) {
+  var q = getQueue();
+  if (!q.some(function (o) { return o.no === order.no; })) q.push(order);
+  setQueue(q);
+  renderAlertQueue();
+}
+
+function retryAlert(orderNo) {
+  var order = getQueue().find(function (o) { return o.no === orderNo; });
+  if (!order) return;
+  fetch(MAILER_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ order: order })
+  }).then(function (r) { return r.json(); })
+    .then(function (data) {
+      if (data && data.ok) {
+        setQueue(getQueue().filter(function (o) { return o.no !== orderNo; }));
+        renderAlertQueue();
+      } else { alert("Mailer still unreachable."); }
+    })
+    .catch(function () { alert("Mailer still unreachable."); });
+}
+
+function renderAlertQueue() {
+  var box = document.getElementById("alertQueue");
+  var q = getQueue();
+  if (!admin || !q.length) { box.hidden = true; return; }
+  box.hidden = false;
+  document.getElementById("alertCount").textContent = "(" + q.length + ")";
+  var ul = document.getElementById("alertList");
+  ul.innerHTML = "";
+  q.forEach(function (o) {
+    var li = document.createElement("li");
+    li.innerHTML = "<span><strong>" + esc(o.no) + "</strong> · " +
+      o.items.map(function (it) { return it.qty + "x " + esc(it.name); }).join(", ") +
+      " · " + money(o.total) + " · " + esc(o.shipTo.city) + ", " + esc(o.shipTo.state) +
+      '</span><span class="mini-btns"><button data-retry="' + esc(o.no) + '">Retry send</button></span>';
+    ul.appendChild(li);
+  });
+  ul.querySelectorAll("[data-retry]").forEach(function (b) {
+    b.addEventListener("click", function () { retryAlert(b.dataset.retry); });
   });
 }
 

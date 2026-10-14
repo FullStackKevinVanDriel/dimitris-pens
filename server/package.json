@@ -1,0 +1,1 @@
+{"dependencies":{"nodemailer":"^6.9.14"},"description":"Local shipping-alert mailer for the Dimitris Pens static shop (Mailpit).","license":"UNLICENSED","main":"mailer.js","name":"dimitris-pens-mailer","private":true,"scripts":{"start":"node mailer.js"},"version":"1.0.0"}
