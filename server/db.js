@@ -94,7 +94,12 @@ function init() {
       const client = await pool.connect();
       try {
         const pending = await checkMigrations(client);
-        if (pending.includes("001_baseline")) throw new Error("database not migrated — run `npm run migrate`");
+        // Refuse only an empty database. A pre-migrations database (tables
+        // exist, no history yet) works fine until the next migrate adopts it.
+        if (pending.includes("001_baseline")) {
+          const { rows } = await client.query("SELECT to_regclass('public.orders') AS t");
+          if (!rows[0].t) throw new Error("database not migrated — run `npm run migrate`");
+        }
         await client.query("BEGIN");
         await client.query("SELECT pg_advisory_xact_lock($1)", [INIT_LOCK]);
         await encryptPII(client);
