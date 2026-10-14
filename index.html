@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dimitris Pens — Fine Writing Instruments</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="masthead-inner">
+    <p class="est">Est. 2026 · Hand-finished</p>
+    <h1 class="shop-name">Dimitris Pens</h1>
+    <p class="tagline">Fine writing instruments, made to be kept</p>
+  </div>
+  <div class="masthead-rule"></div>
+  <nav class="topnav">
+    <div class="categories" id="categoryNav"></div>
+    <button class="cart-btn" id="cartBtn" aria-label="Open cart">
+      Cart <span class="cart-count" id="cartCount">0</span>
+    </button>
+  </nav>
+</header>
+
+<main>
+  <div class="admin-bar" id="adminBar" hidden>
+    <span class="admin-label">Admin mode</span>
+    <button id="addPenBtn">+ Add pen</button>
+    <button id="manageCatsBtn">Categories</button>
+    <button id="exitAdminBtn">Exit admin</button>
+  </div>
+
+  <section class="grid" id="productGrid" aria-live="polite"></section>
+
+  <section class="about">
+    <h2>A note from the bench</h2>
+    <p>Every pen here is turned, fitted, and polished by hand in small batches.
+    Nibs are tuned before they ship, and each instrument leaves the shop with a
+    handwritten test card. If a pen is sold out, it is gone — the next batch
+    is never quite the same.</p>
+  </section>
+</main>
+
+<footer>
+  <div class="footer-rule"></div>
+  <p>Dimitris Pens · 412 Inkwell Lane, Olympia, WA 98501</p>
+  <p class="fineprint">All sales final on custom work. <a href="#" id="adminLink">Admin</a></p>
+</footer>
+
+<!-- Cart drawer -->
+<div class="drawer-overlay" id="drawerOverlay" hidden></div>
+<aside class="drawer" id="cartDrawer" aria-label="Shopping cart" hidden>
+  <div class="drawer-head">
+    <h2>Your Cart</h2>
+    <button class="icon-btn" id="closeCartBtn" aria-label="Close cart">&times;</button>
+  </div>
+  <div class="drawer-body" id="cartItems"></div>
+  <div class="drawer-foot" id="cartFoot"></div>
+</aside>
+
+<!-- Checkout modal -->
+<div class="modal-overlay" id="checkoutOverlay" hidden>
+  <div class="modal" role="dialog" aria-label="Checkout">
+    <div class="drawer-head">
+      <h2>Checkout</h2>
+      <button class="icon-btn" id="closeCheckoutBtn" aria-label="Close checkout">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="summary" id="orderSummary"></div>
+      <form id="checkoutForm" novalidate>
+        <div id="payStep1">
+        <h3>Shipping address</h3>
+        <label>Full name <input name="name" required autocomplete="name"></label>
+        <label>Street <input name="street" required autocomplete="street-address"></label>
+        <div class="row">
+          <label>City <input name="city" required autocomplete="address-level2"></label>
+          <label class="state">State
+            <select name="state" id="stateSelect" required></select>
+          </label>
+          <label class="zip">ZIP <input name="zip" required pattern="[0-9]{5}(-[0-9]{4})?" autocomplete="postal-code"></label>
+        </div>
+        <h3>Shipping method</h3>
+        <label class="radio"><input type="radio" name="ship" value="standard" checked> Standard (5–7 days) — <span id="stdShipLabel">$6.95</span></label>
+        <label class="radio"><input type="radio" name="ship" value="express"> Express (2 days) — $14.95</label>
+        <div class="totals" id="checkoutTotals"></div>
+        <button type="button" class="primary-btn" id="toPaymentBtn">Continue to payment</button>
+        </div>
+        <div id="payStep2" hidden>
+          <div class="testmode-badge">Test mode — no real charge</div>
+          <h3>Payment</h3>
+          <!-- TODO(live): swap these plain inputs for Stripe Elements
+               (cardNumber / cardExpiry / cardCvc mounted Elements) once
+               Stripe.js is loaded and the publishable key is set in payments.js -->
+          <div class="stripe-box">
+            <label class="sl-field sl-full">Card number
+              <input id="ccNum" inputmode="numeric" autocomplete="cc-number"
+                     placeholder="4242 4242 4242 4242" maxlength="19">
+              <span class="field-err" id="errNum"></span>
+            </label>
+            <div class="sl-row">
+              <label class="sl-field">Expiry
+                <input id="ccExp" inputmode="numeric" autocomplete="cc-exp"
+                       placeholder="MM/YY" maxlength="5">
+                <span class="field-err" id="errExp"></span>
+              </label>
+              <label class="sl-field">CVC
+                <input id="ccCvc" inputmode="numeric" autocomplete="cc-csc"
+                       placeholder="123" maxlength="4">
+                <span class="field-err" id="errCvc"></span>
+              </label>
+            </div>
+          </div>
+          <label>Name on card <input id="ccName" autocomplete="cc-name">
+            <span class="field-err" id="errName"></span>
+          </label>
+          <p class="hint">Demo cards: <strong>4242 4242 4242 4242</strong> succeeds ·
+            any card ending <strong>0002</strong> simulates a decline.</p>
+          <div class="pay-error" id="payError" hidden></div>
+          <div class="totals" id="payTotals"></div>
+          <button type="submit" class="primary-btn" id="payBtn">Pay</button>
+          <button type="button" class="ghost-btn" id="backToAddrBtn">Back to address</button>
+        </div>
+      </form>
+      <div class="processing" id="processing" hidden>
+        <div class="spinner"></div>
+        <p>Processing payment…</p>
+      </div>
+      <div class="confirmation" id="confirmation" hidden></div>
+    </div>
+  </div>
+</div>
+
+<!-- Product editor modal (admin) -->
+<div class="modal-overlay" id="editorOverlay" hidden>
+  <div class="modal" role="dialog" aria-label="Edit pen">
+    <div class="drawer-head">
+      <h2 id="editorTitle">Add pen</h2>
+      <button class="icon-btn" id="closeEditorBtn" aria-label="Close editor">&times;</button>
+    </div>
+    <div class="modal-body">
+      <form id="editorForm">
+        <input type="hidden" name="id">
+        <label>Name <input name="name" required maxlength="60"></label>
+        <label>Price (USD) <input name="price" required inputmode="decimal" pattern="[0-9]+(\.[0-9]{1,2})?"></label>
+        <label>Category <select name="category" id="editorCategory"></select></label>
+        <label>In stock <input name="stock" required inputmode="numeric" pattern="[0-9]+"></label>
+        <label>Description <textarea name="desc" rows="2" maxlength="160"></textarea></label>
+        <label>Picture
+          <select name="icon" id="editorIcon"></select>
+        </label>
+        <label class="file-label">…or upload a photo
+          <input type="file" name="photo" accept="image/*" id="photoInput">
+        </label>
+        <div class="img-preview" id="imgPreview"></div>
+        <button type="submit" class="primary-btn">Save pen</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Category manager modal (admin) -->
+<div class="modal-overlay" id="catOverlay" hidden>
+  <div class="modal small" role="dialog" aria-label="Manage categories">
+    <div class="drawer-head">
+      <h2>Categories</h2>
+      <button class="icon-btn" id="closeCatBtn" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <ul class="cat-list" id="catList"></ul>
+      <form id="addCatForm" class="inline-form">
+        <input name="newcat" placeholder="New category name" required maxlength="40">
+        <button type="submit">Add</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script src="payments.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
