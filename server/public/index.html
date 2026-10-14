@@ -28,15 +28,11 @@
     <span class="admin-label">Admin mode</span>
     <button id="addPenBtn">+ Add pen</button>
     <button id="manageCatsBtn">Categories</button>
+    <button id="outboxBtn">Outbox</button>
     <button id="exitAdminBtn">Exit admin</button>
   </div>
 
-  <div class="alert-queue" id="alertQueue" hidden>
-    <h3>Pending shipping alerts <span id="alertCount"></span></h3>
-    <p class="tax-note">The local mailer (localhost:3001) was unreachable when these orders
-    were placed. Start it, then retry — or copy the details manually.</p>
-    <ul class="cat-list" id="alertList"></ul>
-  </div>
+
 
   <section class="grid" id="productGrid" aria-live="polite"></section>
 
@@ -179,6 +175,21 @@
         <input name="newcat" placeholder="New category name" required maxlength="40">
         <button type="submit">Add</button>
       </form>
+    </div>
+  </div>
+</div>
+
+<!-- Shipping alert outbox (admin) -->
+<div class="modal-overlay" id="outboxOverlay" hidden>
+  <div class="modal" role="dialog" aria-label="Shipping alert outbox">
+    <div class="drawer-head">
+      <h2>Shipping outbox</h2>
+      <button class="icon-btn" id="closeOutboxBtn" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p class="tax-note">Queued shipping alerts for paid orders. No SMTP in serverless &mdash;
+      wire Resend/Postmark where the alert is queued (server/app.js) to actually send these.</p>
+      <ul class="cat-list" id="outboxList"></ul>
     </div>
   </div>
 </div>
