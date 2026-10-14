@@ -1,0 +1,54 @@
+name: CI
+
+# Runs migrations + the full smoke test (API + headless Chromium) against a
+# throwaway Postgres on every PR into test or main.
+
+on:
+  pull_request:
+    branches: [test, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: penstest
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      POSTGRES_URL: postgres://postgres:penstest@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            smoke/package-lock.json
+
+      - name: Install
+        run: |
+          npm ci
+          npm ci --prefix smoke
+          (cd smoke && npx playwright install --with-deps chromium)
+
+      - name: Smoke test (migrations, API, browser)
+        run: npm run smoke

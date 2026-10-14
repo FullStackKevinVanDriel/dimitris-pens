@@ -10,15 +10,36 @@ inventory, orders, and shipping alerts all live in Postgres.
 npm install
 docker run -d --name dp-pg -e POSTGRES_PASSWORD=penstest -p 5432:5432 postgres:16
 npm run setup      # writes .env: asks for an admin password, generates the PII key
+npm run migrate    # create/upgrade the schema (seeds 7 pens + 3 categories into an empty shop)
 npm start          # → http://localhost:3001  (admin: footer "Admin" link or /?admin=1)
 ```
-
-First boot applies `server/schema.sql` and seeds 7 pens + 3 categories.
+(`npm run dev` = migrate + start.)
 Prices are integer cents; tax + shipping are computed server-side.
 
 Secrets and env vars are documented in `.env.example` and `server/config.js`.
 The server refuses to start without `POSTGRES_URL`, `ADMIN_PASSWORD_HASH`
 and `PII_ENC_KEY`. To change the admin password: `npm run hash-password`.
+
+## Database migrations
+
+Schema changes are versioned SQL files in `migrations/`
+([node-pg-migrate](https://github.com/salsita/node-pg-migrate); history in
+the `pgmigrations` table). The app never changes the schema at startup.
+
+```bash
+npm run migrate:create add-customer-email   # → migrations/<timestamp>_add-customer-email.sql
+#   edit the "-- Up Migration" / "-- Down Migration" sections
+npm run migrate                              # apply pending
+npm run migrate:down                         # roll back the latest
+npm run smoke                                # verify
+```
+
+On Vercel, the build step (`npm run vercel-build`) applies pending
+migrations before a **Production** deploy goes live, and a failing migration
+fails the deploy. Preview builds skip migrations unless `MIGRATE_ON_BUILD=true`,
+because Preview shares the Production database for now (issue #15). Keep
+migrations backward-compatible: the old deployment keeps serving while the
+new one migrates (add a column → deploy code that uses it → drop the old one later).
 
 ## Customizing the shop
 
@@ -85,7 +106,8 @@ POSTGRES_URL=postgres://postgres:penstest@localhost:5432/postgres npm run smoke:
 (`cd smoke && npm install` once for Playwright.) The test generates its own
 throwaway admin password and PII key, so no `.env` is needed.
 
-Covers the API (auth on every admin route, CSRF origin check, upload
+Covers migrations (fresh DB, re-run no-op, adopting a pre-migrations
+database without data loss), the API (auth on every admin route, CSRF origin check, upload
 validation, settings validation and public/private split, CRUD, reorder,
 mock pay, forged/underpaid/reused payments, order math, inventory, PII
 encrypted in the raw DB rows, hashed session tokens) plus the browser flow
