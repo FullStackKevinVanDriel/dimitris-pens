@@ -27,6 +27,8 @@ Why Vercel and not something else:
 | `PII_ENC_KEY` | `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` | **Different key per environment.** Back up the Production key in a password manager |
 | `PII_ENC_KEYS_PREVIOUS` | only during key rotation | old key(s), comma-separated |
 | `ALERT_TO` | optional | initial alert email (also editable in admin) |
+| `RESEND_API_KEY` | resend.com → API Keys (sending access) | optional; enables shipping-alert emails |
+| `RESEND_FROM` | optional | e.g. `Dimitris Pens <orders@yourdomain.com>` once the domain is verified in Resend; default `onboarding@resend.dev` only delivers to your own Resend account email |
 
 Set them in Vercel → Project → Settings → Environment Variables. Mark them
 **Sensitive** so they can't be read back in the dashboard. Vercel encrypts
@@ -71,7 +73,6 @@ its own database: create a Neon branch for Preview, point Preview's
   `server/public/payments.js`). Use Stripe Elements and a webhook to mark
   `payments.status = 'succeeded'`. Add `https://js.stripe.com` to the CSP
   `script-src`/`frame-src` in `server/app.js`.
-- Send shipping alerts through Resend or Postmark (`queueShippingAlert`).
 - CI (`.github/workflows/ci.yml`) runs migrations + the smoke test on every
   PR. Make it a required check on `main` once it has run.
 
