@@ -374,3 +374,5 @@ footer { text-align: center; padding: 0 20px 40px; color: var(--ink-soft); font-
 .settings-group input[type="color"] { width: 56px; height: 32px; padding: 2px; }
 .settings-group label.color-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .settings-saved { color: var(--brass); font-style: italic; margin: 8px 0; }
+.alert-status[data-status="sent"] { color: #2d6a3a; }
+.alert-status[data-status="failed"] { color: var(--accent); font-weight: 600; }

@@ -25,6 +25,7 @@
  *   PUT    /api/categories/:id       {name}
  *   DELETE /api/categories/:id
  *   GET    /api/alerts               (shipping alert outbox, latest first)
+ *   POST   /api/alerts/:id/send      retry emailing a queued/failed alert
  *   GET    /api/orders               (latest 100, PII decrypted)
  *   GET    /api/orders/:id           (by id or order_number, with items)
  *
@@ -50,6 +51,7 @@ const { pool, uid } = require("./db");
 const pii = require("./crypto");
 const auth = require("./auth");
 const settings = require("./settings");
+const email = require("./email");
 
 const app = express();
 // Client IP for login rate limiting. Vercel sets a trustworthy
@@ -168,17 +170,18 @@ function alertBody(o, items) {
   ].join("\n");
 }
 
-// Shipping alerts: no SMTP in serverless, so paid orders queue their alert
-// in the shipping_alerts table (admin Outbox view). The body contains the
-// customer's address, so it's encrypted at rest. Graduation path: a
-// Resend/Postmark API call where the INSERT below happens.
+// Shipping alerts: paid orders queue their alert in shipping_alerts inside
+// the order transaction (so it can't be lost), then it's emailed through
+// Resend after commit (server/email.js). The body contains the customer's
+// address, so it's encrypted at rest. Admin Outbox shows status + retry.
 async function queueShippingAlert(client, order, items, recipient) {
   const subject = `Shipping alert — order ${order.order_number}`;
+  const id = uid("sa");
   await client.query(
     `INSERT INTO shipping_alerts (id, order_id, recipient, subject, body, status)
      VALUES ($1, $2, $3, $4, $5, 'queued')`,
     [
-      uid("sa"),
+      id,
       order.id,
       recipient,
       subject,
@@ -186,6 +189,7 @@ async function queueShippingAlert(client, order, items, recipient) {
     ],
   );
   console.log("shipping alert queued for", order.order_number);
+  return id;
 }
 
 /* ---------------- health ---------------- */
@@ -494,6 +498,17 @@ app.get(
   }),
 );
 
+app.post(
+  "/api/alerts/:id/send",
+  requireAdmin,
+  wrap(async (req, res) => {
+    if (!email.enabled()) throw httpError(409, "email not configured (set RESEND_API_KEY)");
+    const r = await email.deliverAlert(req.params.id);
+    if (r.status === "missing") throw httpError(404, "not found");
+    res.json({ ok: r.status === "sent", ...r });
+  }),
+);
+
 /* ---------------- quote (server totals for display + payment amount) ---------------- */
 async function priceItems(db, items, lock) {
   if (!Array.isArray(items) || !items.length) throw httpError(422, "no items");
@@ -687,8 +702,8 @@ async function createOrder(input) {
         ],
       );
     }
-    // Queue the shipping alert in the same transaction — no SMTP in serverless.
-    await queueShippingAlert(
+    // Queue the shipping alert in the same transaction; emailed after commit.
+    const alertId = await queueShippingAlert(
       client,
       decryptOrder(orows[0]),
       lines,
@@ -708,6 +723,7 @@ async function createOrder(input) {
       payment_id: paymentId,
       address: addr,
       items: lines,
+      alertId,
     };
   } catch (e) {
     await client.query("ROLLBACK");
@@ -720,7 +736,10 @@ async function createOrder(input) {
 app.post(
   "/api/orders",
   wrap(async (req, res) => {
-    const order = await createOrder(req.body || {});
+    const { alertId, ...order } = await createOrder(req.body || {});
+    // Awaited so the serverless function doesn't freeze mid-send; never
+    // throws, and a failure only marks the alert for retry.
+    await email.deliverAlert(alertId);
     res.status(201).json({ ok: true, order });
   }),
 );

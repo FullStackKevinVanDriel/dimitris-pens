@@ -88,10 +88,11 @@ Admin routes need the session cookie from `POST /api/admin/login`.
   `server/app.js` + `server/public/payments.js` mark the real-Stripe path:
   publishable key client-side, `POST /api/payments/intent` (secret key)
   returning `client_secret`, `stripe.confirmCardPayment()` on the client.
-- **Shipping alerts**: no SMTP in serverless — paid orders INSERT into
-  `shipping_alerts` (status `queued`), listed in admin → Outbox. Graduation
-  path is a Resend/Postmark API call where the INSERT happens
-  (`queueShippingAlert` in `server/app.js`).
+- **Shipping alerts**: each paid order queues an alert in `shipping_alerts`
+  inside the order transaction, then emails it through Resend
+  (`server/email.js`) when `RESEND_API_KEY` is set. Admin → Outbox shows
+  queued / sent / failed; failed sends have a "send now" retry. An email
+  outage never blocks an order.
 - **Admin mode**: discreet `Admin` link in the footer (or `?admin=1`) opens
   a password prompt. Session lasts 8h; "Log out" in the admin bar ends it.
 

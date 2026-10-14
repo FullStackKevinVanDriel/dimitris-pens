@@ -189,8 +189,8 @@
       <button class="icon-btn" id="closeOutboxBtn" aria-label="Close">&times;</button>
     </div>
     <div class="modal-body">
-      <p class="tax-note">Queued shipping alerts for paid orders. No SMTP in serverless &mdash;
-      wire Resend/Postmark where the alert is queued (server/app.js) to actually send these.</p>
+      <p class="tax-note">Shipping alerts for paid orders, emailed through Resend when
+      RESEND_API_KEY is set (otherwise they stay queued here). Failed sends can be retried.</p>
       <ul class="cat-list" id="outboxList"></ul>
     </div>
   </div>

@@ -602,10 +602,22 @@ async function renderOutbox() {
       const when = new Date(a.created_at).toLocaleString();
       li.innerHTML =
         "<span><strong>" + esc(a.order_number) + "</strong> · " + esc(a.recipient) +
-        '<br><span class="tax-note">' + esc(a.subject) + " · " + esc(when) + " · " + esc(a.status) + "</span>" +
-        "<details><summary>body</summary><pre>" + esc(a.body) + "</pre></details></span>";
+        '<br><span class="tax-note">' + esc(a.subject) + " · " + esc(when) + " · " +
+        '<span class="alert-status" data-status="' + esc(a.status) + '">' + esc(a.status) + "</span>" +
+        (a.last_error ? " — " + esc(a.last_error) : "") + "</span>" +
+        "<details><summary>body</summary><pre>" + esc(a.body) + "</pre></details></span>" +
+        (a.status !== "sent" ? '<span class="mini-btns"><button data-sendalert="' + esc(a.id) + '">send now</button></span>' : "");
       ul.appendChild(li);
     });
+    ul.querySelectorAll("[data-sendalert]").forEach((b) =>
+      b.addEventListener("click", async () => {
+        b.disabled = true;
+        try {
+          const r = await apiPost("/alerts/" + b.dataset.sendalert + "/send", {});
+          if (!r.ok) alert("Not sent: " + (r.error || r.status));
+        } catch (err) { alert("Not sent: " + err.message); }
+        renderOutbox();
+      }));
   } catch (err) {
     ul.innerHTML = "<li>Failed to load outbox: " + esc(err.message) + "</li>";
   }
