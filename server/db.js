@@ -1,36 +1,65 @@
 /* Dimitris Pens — Postgres setup (node-postgres).
  *
- * Connection string from POSTGRES_URL or DATABASE_URL (required).
- * SSL is enabled automatically for Neon (*.neon.tech) or when PGSSL=true;
- * local docker Postgres works without it.
+ * Connection string from POSTGRES_URL or DATABASE_URL (see server/config.js).
+ * SSL (with certificate verification) is enabled automatically for Neon /
+ * Vercel Postgres or when PGSSL=true; local docker Postgres works without it.
  *
- * Exports { pool, uid, ready }: `ready` resolves once the schema is applied
- * and the catalog is seeded (seed runs only when categories is empty).
+ * Exports { pool, uid, ready }: `ready` resolves once the schema is applied,
+ * the catalog is seeded (only when categories is empty), and any plaintext
+ * or old-key PII rows have been (re-)encrypted.
  */
 "use strict";
 
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const { Pool } = require("pg");
 
-const connStr = process.env.POSTGRES_URL || process.env.DATABASE_URL;
-if (!connStr) {
-  throw new Error(
-    "Missing POSTGRES_URL (or DATABASE_URL). For local dev: " +
-    "docker run -d --name dp-pg -e POSTGRES_PASSWORD=penstest -p 5432:5432 postgres:16, " +
-    "then POSTGRES_URL=postgres://postgres:penstest@localhost:5432/postgres node server/index.js"
-  );
-}
-const useSSL = /neon\.tech/.test(connStr) || process.env.PGSSL === "true";
+const config = require("./config");
 
 const pool = new Pool({
-  connectionString: connStr,
-  ...(useSSL ? { ssl: { rejectUnauthorized: false } } : {})
+  connectionString: config.dbUrl,
+  ...(config.pgSSL ? { ssl: { rejectUnauthorized: !config.pgSSLInsecure } } : {})
 });
 pool.on("error", (err) => console.error("pg pool error:", err.message));
 
 function uid(prefix) {
-  return prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  return prefix + crypto.randomBytes(9).toString("base64url");
+}
+
+// PII columns encrypted at rest (AES-256-GCM, see server/crypto.js).
+const PII_COLUMNS = {
+  orders: ["customer_name", "street", "city", "zip"],
+  shipping_alerts: ["body"]
+};
+
+/* Encrypts legacy plaintext rows and re-encrypts rows written with a
+ * rotated-out key. Idempotent; a no-op once everything is current. */
+async function encryptPII(client) {
+  const pii = require("./crypto");
+  for (const [table, cols] of Object.entries(PII_COLUMNS)) {
+    // Only fetch rows not already under the current key (cheap on cold start).
+    const prefix = pii.currentPrefix() + "%";
+    const { rows } = await client.query(
+      `SELECT id, ${cols.join(", ")} FROM ${table} WHERE ` +
+      cols.map((c) => `(${c} IS NOT NULL AND ${c} NOT LIKE $1)`).join(" OR "), [prefix]);
+    let n = 0;
+    for (const r of rows) {
+      let vals;
+      try {
+        vals = cols.map((c) => (r[c] == null ? null : pii.encrypt(pii.decrypt(r[c]))));
+      } catch (e) {
+        // Unknown key: leave the row alone rather than take the shop down.
+        console.error(`PII: cannot decrypt ${table} ${r.id}: ${e.message}`);
+        continue;
+      }
+      await client.query(
+        `UPDATE ${table} SET ${cols.map((c, i) => `${c} = $${i + 2}`).join(", ")} WHERE id = $1`,
+        [r.id, ...vals]);
+      n++;
+    }
+    if (n) console.log(`encrypted PII in ${n} ${table} row(s)`);
+  }
 }
 
 const SEED_CATS = [
@@ -75,6 +104,7 @@ const ready = (async () => {
   try {
     await client.query(schema);
     await seed(client);
+    await encryptPII(client);
   } finally {
     client.release();
   }
@@ -83,4 +113,4 @@ const ready = (async () => {
   throw err;
 });
 
-module.exports = { pool, uid, ready };
+module.exports = { pool, uid, ready, PII_COLUMNS };

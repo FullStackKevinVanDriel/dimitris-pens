@@ -1,1 +1,24 @@
-{"dependencies":{"express":"^4.21.2","pg":"^8.13.1"},"description":"Dimitris Pens — custom pen shop. Express API + Postgres, static frontend served by the same app. Deploy target: Vercel serverless (see api/index.js + vercel.json).","engines":{"node":">=18"},"license":"UNLICENSED","main":"server/index.js","name":"dimitris-pens","private":true,"scripts":{"start":"node server/index.js"},"version":"2.0.0"}
+{
+  "dependencies": {
+    "dotenv": "^18.0.8",
+    "express": "^4.21.2",
+    "helmet": "^8.3.0",
+    "pg": "^8.13.1"
+  },
+  "description": "Dimitris Pens — custom pen shop. Express API + Postgres, static frontend served by the same app. Deploy: see docs/DEPLOYMENT.md.",
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED",
+  "main": "server/index.js",
+  "name": "dimitris-pens",
+  "private": true,
+  "scripts": {
+    "start": "node server/index.js",
+    "setup": "node scripts/setup.js",
+    "hash-password": "node scripts/hash-password.js",
+    "smoke": "node smoke/test.js",
+    "smoke:chrome": "SMOKE_CHANNEL=chrome SMOKE_HEADED=1 node smoke/test.js"
+  },
+  "version": "3.0.0"
+}
