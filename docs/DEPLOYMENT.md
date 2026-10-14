@@ -54,7 +54,7 @@ Changing the admin password: `npm run hash-password`, update
 5. After the first production boot, check the logs for
    `encrypted PII in … orders row(s)` (existing orders encrypted) and confirm
    `GET /api/orders` returns 401 when logged out.
-6. Clean-up: disable GitHub Pages, add branch protection on `main`
+6. Clean-up: add branch protection on `main`
    (require PR + checks), and consider making the repo private.
 7. Optional: add a custom domain in Vercel (TLS is automatic).
 
