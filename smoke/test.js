@@ -27,8 +27,9 @@ const SECRETS = {
   COOKIE_SECURE: "false"
 };
 
-const BASE_URL = process.env.SMOKE_BASE || "http://localhost:3001";
-const PORT = process.env.SMOKE_PORT || "3001";
+// Own port, so a dev server on :3001 doesn't get tested by mistake.
+const PORT = process.env.SMOKE_PORT || "3101";
+const BASE_URL = process.env.SMOKE_BASE || "http://localhost:" + PORT;
 
 let stepNo = 0;
 function step(name) { stepNo++; console.log(`\n[step ${stepNo}] ${name}`); }
