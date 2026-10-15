@@ -6,7 +6,8 @@
  * Preview) — never commit them. See .env.example and docs/DEPLOYMENT.md.
  *
  * Required:
- *   POSTGRES_URL / DATABASE_URL  Postgres connection string
+ *   POSTGRES_URL / DATABASE_URL  Postgres connection string (Vercel Preview uses
+ *                                PREVIEW_POSTGRES_URL instead; see db-url.js)
  *   ADMIN_PASSWORD_HASH          scrypt hash from `npm run hash-password`
  *   PII_ENC_KEY                  base64, 32 bytes — AES-256-GCM key for PII
  * Optional:
@@ -39,7 +40,11 @@ function decodeKey(b64, name) {
 
 function load() {
   const missing = [];
-  const dbUrl = env.POSTGRES_URL || env.DATABASE_URL;
+  const { appUrl, previewWithoutOwnDb } = require("./db-url");
+  const dbUrl = appUrl(env);
+  if (previewWithoutOwnDb(env) && dbUrl) {
+    console.warn("Preview deployment without PREVIEW_POSTGRES_URL: using the shared database");
+  }
   if (!dbUrl) missing.push("POSTGRES_URL");
   if (!env.ADMIN_PASSWORD_HASH) missing.push("ADMIN_PASSWORD_HASH");
   if (!env.PII_ENC_KEY) missing.push("PII_ENC_KEY");
