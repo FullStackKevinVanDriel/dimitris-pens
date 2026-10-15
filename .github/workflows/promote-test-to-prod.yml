@@ -1,8 +1,9 @@
 name: Promote test to production
 
-# Manual promotion: opens a test → main PR when test is ahead.
-# Mirrors the UpsideOnly promotion-routine pattern — opens the PR,
-# never auto-merges. Merging main auto-deploys to Vercel (production).
+# Manual promotion: opens a test → main PR when test is ahead. Opens the PR,
+# never merges it. Merging into main deploys production ("Deploy production"
+# runs after CI passes on main). The step before this is "Promote development
+# to test".
 
 on:
   workflow_dispatch:
@@ -40,7 +41,7 @@ jobs:
           fi
           COMMITS=$(git log --oneline origin/main..origin/test | head -10)
           {
-            echo "Promotes test to production (main). Merging auto-deploys to Vercel."
+            echo "Promotes test to production (main). After merge, CI runs on main and Deploy production deploys it."
             echo
             echo "Commits included:"
             echo '```'
