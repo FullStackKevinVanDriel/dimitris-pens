@@ -3,9 +3,9 @@
  * No localStorage for shop data: products, categories, inventory, orders and
  * site settings all live server-side in Postgres. Admin mode requires a
  * server login (HttpOnly session cookie); the UI only shows admin controls,
- * every admin API call is authorized server-side. The cart is in-memory only —
- * it does not survive a reload (documented tradeoff; a cookie-keyed
- * server cart would be the next step if that matters).
+ * every admin API call is authorized server-side. The cart (product ids +
+ * quantities only, no personal data) is kept in localStorage so it survives
+ * a reload; it's re-checked against live stock on load.
  */
 "use strict";
 
@@ -79,7 +79,7 @@ function artFor(p) {
 /* ---------------- state (in-memory) ---------------- */
 let products = [];
 let categories = [];
-let cart = []; // [{id, qty}] — not persisted (see header note)
+let cart = []; // [{id, qty}] — saved to localStorage on every render (see saveCart)
 let admin = false; // set from GET /api/admin/session; server enforces it
 let settings = {};  // public site settings (GET /api/settings)
 let settingsMeta = { fields: [], fonts: {} };
@@ -250,7 +250,26 @@ function addToCart(id, qty) {
   renderCart(); renderGrid();
 }
 
+/* Cart persistence (#31). Wrapped in try/catch: storage can be blocked
+ * (private mode, disabled cookies) and the shop must work without it. */
+const CART_KEY = "dp_cart_v1";
+function saveCart() {
+  try { localStorage.setItem(CART_KEY, JSON.stringify(cart)); } catch (e) { /* storage unavailable */ }
+}
+function loadCart() {
+  let saved = [];
+  try { saved = JSON.parse(localStorage.getItem(CART_KEY) || "[]"); } catch (e) { saved = []; }
+  if (!Array.isArray(saved)) saved = [];
+  // Keep only products that still exist, capped at current stock.
+  cart = saved.map((l) => {
+    const p = prod(String(l && l.id));
+    const qty = Math.min(parseInt(l && l.qty, 10) || 0, p ? p.inventory : 0);
+    return p && qty > 0 ? { id: p.id, qty } : null;
+  }).filter(Boolean);
+}
+
 function renderCart() {
+  saveCart();
   document.getElementById("cartCount").textContent = cartQty();
   const box = document.getElementById("cartItems");
   const foot = document.getElementById("cartFoot");
@@ -443,6 +462,7 @@ async function submitPayment(ev) {
   // recomputes tax/shipping, checks the payment matches, decrements
   // inventory atomically, and queues the shipping alert.
   const form = document.getElementById("checkoutForm");
+  const email = form.email.value.trim();
   const address = {
     name: form.name.value.trim(), street: form.street.value.trim(),
     city: form.city.value.trim(), state: t.state, zip: form.zip.value.trim()
@@ -451,7 +471,7 @@ async function submitPayment(ev) {
   try {
     const res = await apiPost("/orders", {
       items: cart.map((c) => ({ product_id: c.id, qty: c.qty })),
-      address, ship_method: t.method, payment_id: payment.id
+      address, email, ship_method: t.method, payment_id: payment.id
     });
     order = res.order;
   } catch (err) {
@@ -587,6 +607,8 @@ function renderCatList() {
 }
 
 /* ---------------- admin: shipping outbox ---------------- */
+const EMAIL_KINDS = { shipping_alert: "Shipping alert", order_confirmation: "Order confirmation", order_shipped: "Shipped notice" };
+
 async function renderOutbox() {
   const ul = document.getElementById("outboxList");
   ul.innerHTML = "<li>Loading…</li>";
@@ -601,7 +623,7 @@ async function renderOutbox() {
       const li = document.createElement("li");
       const when = new Date(a.created_at).toLocaleString();
       li.innerHTML =
-        "<span><strong>" + esc(a.order_number) + "</strong> · " + esc(a.recipient) +
+        "<span><strong>" + esc(a.order_number) + "</strong> · " + esc(EMAIL_KINDS[a.kind] || a.kind) + " → " + esc(a.recipient) +
         '<br><span class="tax-note">' + esc(a.subject) + " · " + esc(when) + " · " +
         '<span class="alert-status" data-status="' + esc(a.status) + '">' + esc(a.status) + "</span>" +
         (a.last_error ? " — " + esc(a.last_error) : "") + "</span>" +
@@ -620,6 +642,65 @@ async function renderOutbox() {
       }));
   } catch (err) {
     ul.innerHTML = "<li>Failed to load outbox: " + esc(err.message) + "</li>";
+  }
+}
+
+/* ---------------- admin: orders (#29) ---------------- */
+const NEXT_ACTIONS = {
+  paid: [["shipped", "Mark shipped"], ["cancelled", "Cancel + restock"]],
+  shipped: [["delivered", "Mark delivered"]],
+  delivered: [], cancelled: []
+};
+let ordersSearchTimer = null;
+
+async function renderOrders() {
+  const ul = document.getElementById("ordersList");
+  ul.innerHTML = "<li>Loading…</li>";
+  const params = new URLSearchParams();
+  const status = document.getElementById("ordersStatus").value;
+  const q = document.getElementById("ordersSearch").value.trim();
+  if (status) params.set("status", status);
+  if (q) params.set("q", q);
+  try {
+    const orders = await apiGet("/orders" + (params.toString() ? "?" + params : ""));
+    if (!orders.length) { ul.innerHTML = '<li><span class="tax-note">No orders.</span></li>'; return; }
+    ul.innerHTML = "";
+    orders.forEach((o) => {
+      const li = document.createElement("li");
+      li.dataset.order = o.order_number;
+      const when = new Date(o.created_at).toLocaleString();
+      const items = (o.items || []).map((it) => esc(it.qty + "× " + it.product_name)).join("<br>");
+      const actions = NEXT_ACTIONS[o.status] || [];
+      li.innerHTML =
+        '<div class="order-head"><span><strong>' + esc(o.order_number) + "</strong> · " + esc(when) + " · " +
+          money(o.total_cents) + "</span>" +
+          '<span class="order-status" data-status="' + esc(o.status) + '">' + esc(o.status) + "</span></div>" +
+        '<div class="order-detail">' +
+          "<div>" + items + "</div>" +
+          "<div>" + esc(o.customer_name) + "<br>" + esc(o.street) + "<br>" + esc(o.city) + ", " + esc(o.state) + " " + esc(o.zip) +
+            "<br>" + esc(o.customer_email || "no email") + "<br>" + esc(o.ship_method) + " shipping" +
+            (o.tracking_number ? "<br>Tracking: " + esc(o.tracking_number) : "") + "</div>" +
+        "</div>" +
+        (actions.length ? '<div class="order-actions">' +
+          (o.status === "paid" ? '<input data-tracking placeholder="Tracking # (optional)" maxlength="100">' : "") +
+          actions.map(([st, label]) => '<button data-setstatus="' + st + '">' + esc(label) + "</button>").join("") +
+        "</div>" : "");
+      li.querySelectorAll("[data-setstatus]").forEach((b) =>
+        b.addEventListener("click", async () => {
+          const st = b.dataset.setstatus;
+          if (st === "cancelled" && !confirm("Cancel order " + o.order_number + " and put its items back in stock?")) return;
+          const tr = li.querySelector("[data-tracking]");
+          b.disabled = true;
+          try {
+            await apiPut("/orders/" + o.id + "/status", { status: st, tracking_number: tr ? tr.value.trim() : "" });
+            if (st === "cancelled") { await refresh(); renderGrid(); }
+          } catch (err) { alert("Update failed: " + err.message); }
+          renderOrders();
+        }));
+      ul.appendChild(li);
+    });
+  } catch (err) {
+    ul.innerHTML = "<li>Failed to load orders: " + esc(err.message) + "</li>";
   }
 }
 
@@ -824,6 +905,18 @@ document.getElementById("manageCatsBtn").addEventListener("click", () => {
   renderCatList();
   document.getElementById("catOverlay").hidden = false;
 });
+document.getElementById("ordersBtn").addEventListener("click", () => {
+  renderOrders();
+  document.getElementById("ordersOverlay").hidden = false;
+});
+document.getElementById("closeOrdersBtn").addEventListener("click", () => {
+  document.getElementById("ordersOverlay").hidden = true;
+});
+document.getElementById("ordersStatus").addEventListener("change", renderOrders);
+document.getElementById("ordersSearch").addEventListener("input", () => {
+  clearTimeout(ordersSearchTimer);
+  ordersSearchTimer = setTimeout(renderOrders, 250);
+});
 document.getElementById("outboxBtn").addEventListener("click", () => {
   renderOutbox();
   document.getElementById("outboxOverlay").hidden = false;
@@ -863,7 +956,7 @@ document.getElementById("addCatForm").addEventListener("submit", async (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     closeCart();
-    ["checkoutOverlay", "editorOverlay", "catOverlay", "outboxOverlay", "loginOverlay", "settingsOverlay"].forEach((id) => {
+    ["checkoutOverlay", "editorOverlay", "catOverlay", "outboxOverlay", "loginOverlay", "settingsOverlay", "ordersOverlay"].forEach((id) => {
       document.getElementById(id).hidden = true;
     });
   }
@@ -875,6 +968,7 @@ document.addEventListener("keydown", (e) => {
   try {
     const [, sess] = await Promise.all([loadSettings(), apiGet("/admin/session"), refresh()]);
     admin = !!sess.admin;
+    loadCart();
   } catch (err) {
     document.getElementById("productGrid").innerHTML =
       '<p class="cart-empty">The shop server is unreachable. Start it with <code>npm start</code>.</p>';

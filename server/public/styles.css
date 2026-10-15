@@ -376,3 +376,19 @@ footer { text-align: center; padding: 0 20px 40px; color: var(--ink-soft); font-
 .settings-saved { color: var(--brass); font-style: italic; margin: 8px 0; }
 .alert-status[data-status="sent"] { color: #2d6a3a; }
 .alert-status[data-status="failed"] { color: var(--accent); font-weight: 600; }
+
+/* ---------- Admin orders ---------- */
+.modal.wide { max-width: 760px; }
+.orders-filter { display: flex; gap: 8px; margin-bottom: 12px; }
+.orders-filter select, .orders-filter input { border: 1px solid var(--rule); padding: 7px 9px; font-size: 14px; background: #fffdf8; }
+.orders-filter input { flex: 1; }
+.orders-list li { display: block; }
+.order-head { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.order-status { text-transform: uppercase; font-size: 11px; letter-spacing: 0.12em; padding: 2px 8px; border: 1px solid var(--rule); }
+.order-status[data-status="paid"] { border-color: var(--accent); color: var(--accent); }
+.order-status[data-status="shipped"] { border-color: var(--brass); color: var(--brass); }
+.order-status[data-status="cancelled"] { color: var(--sold); }
+.order-detail { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 18px; margin: 8px 0; font-size: 13.5px; }
+.order-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.order-actions input { border: 1px solid var(--rule); padding: 6px 8px; font-size: 13px; }
+@media (max-width: 560px) { .order-detail { grid-template-columns: 1fr; } }

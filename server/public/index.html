@@ -29,6 +29,7 @@
     <span class="admin-label">Admin mode</span>
     <button id="addPenBtn">+ Add pen</button>
     <button id="manageCatsBtn">Categories</button>
+    <button id="ordersBtn">Orders</button>
     <button id="outboxBtn">Outbox</button>
     <button id="settingsBtn">Site settings</button>
     <button id="exitAdminBtn">Log out</button>
@@ -77,6 +78,8 @@
         <div id="payStep1">
         <h3>Shipping address</h3>
         <label>Full name <input name="name" required autocomplete="name"></label>
+        <label>Email <input name="email" type="email" required autocomplete="email" maxlength="200">
+          <span class="hint">For your order confirmation.</span></label>
         <label>Street <input name="street" required autocomplete="street-address"></label>
         <div class="row">
           <label>City <input name="city" required autocomplete="address-level2"></label>
@@ -181,16 +184,40 @@
   </div>
 </div>
 
+<!-- Orders (admin) -->
+<div class="modal-overlay" id="ordersOverlay" hidden>
+  <div class="modal wide" role="dialog" aria-label="Orders">
+    <div class="drawer-head">
+      <h2>Orders</h2>
+      <button class="icon-btn" id="closeOrdersBtn" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="orders-filter">
+        <select id="ordersStatus" aria-label="Filter by status">
+          <option value="">All orders</option>
+          <option value="paid">To ship (paid)</option>
+          <option value="shipped">Shipped</option>
+          <option value="delivered">Delivered</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+        <input id="ordersSearch" placeholder="Order number" aria-label="Search by order number">
+      </div>
+      <ul class="cat-list orders-list" id="ordersList"></ul>
+    </div>
+  </div>
+</div>
+
 <!-- Shipping alert outbox (admin) -->
 <div class="modal-overlay" id="outboxOverlay" hidden>
   <div class="modal" role="dialog" aria-label="Shipping alert outbox">
     <div class="drawer-head">
-      <h2>Shipping outbox</h2>
+      <h2>Email outbox</h2>
       <button class="icon-btn" id="closeOutboxBtn" aria-label="Close">&times;</button>
     </div>
     <div class="modal-body">
-      <p class="tax-note">Shipping alerts for paid orders, emailed through Resend when
-      RESEND_API_KEY is set (otherwise they stay queued here). Failed sends can be retried.</p>
+      <p class="tax-note">Every email the shop sends: your shipping alerts plus customer
+      confirmations and shipped notices, delivered through Resend when RESEND_API_KEY is set
+      (otherwise they stay queued here). Failed sends can be retried.</p>
       <ul class="cat-list" id="outboxList"></ul>
     </div>
   </div>
