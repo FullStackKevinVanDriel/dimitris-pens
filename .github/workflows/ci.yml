@@ -1,24 +1,24 @@
 name: CI
 
 # Runs migrations + the full smoke test (API + headless Chromium) against a
-# throwaway Postgres on every PR into test and on every push to test.
+# throwaway Postgres on every PR into development and on every push to
+# development, test and main.
 #
-# Not on PRs into main: those are promotion PRs (test → main) whose head is
-# a test commit the push run already checked — its "smoke" check shows on
-# the promotion PR and satisfies main's required check. The promote
-# workflow opens them with GITHUB_TOKEN, and a pull_request run for such a
-# PR started with zero jobs and showed as failed (#27).
-# Any other PR into main gets no smoke check and stays blocked; run this
-# workflow manually on its branch if that's ever really needed.
+# Not on PRs into test or main: those are promotion PRs (development -> test,
+# test -> main) opened by the promote workflows with GITHUB_TOKEN. GitHub
+# doesn't start pull_request runs for them (one once showed as a zero-job
+# failure, #27), but their head is a commit the push run already checked,
+# so its "smoke" check shows on the promotion PR and satisfies the required
+# check. Any other PR into test or main gets no smoke check and stays blocked.
 #
-# Also on push to main: a passing run there is what triggers "Deploy
-# production" (and on test, "Deploy preview (test)").
+# A passing push run on test triggers "Deploy preview (test)"; on main,
+# "Deploy production". development isn't deployed; it's what localhost runs.
 
 on:
   pull_request:
-    branches: [test]
+    branches: [development]
   push:
-    branches: [test, main]
+    branches: [development, test, main]
   workflow_dispatch:
 
 permissions:
@@ -29,6 +29,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Only on PRs into development: feature/ or fix/ branch, closes an open issue (#49).
+  pr-rules:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Branch name and linked issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_REF: ${{ github.head_ref }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          REPO: ${{ github.repository }}
+        run: bash scripts/pr-rules.sh
+
   smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 15
