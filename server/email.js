@@ -38,7 +38,7 @@ async function deliverAlert(alertId) {
         "Content-Type": "application/json",
         "Idempotency-Key": "shipping-alert-" + a.id
       },
-      body: JSON.stringify({ from: FROM, to: [a.recipient], subject: a.subject, text: pii.decrypt(a.body) }),
+      body: JSON.stringify({ from: FROM, to: [pii.decrypt(a.recipient)], subject: a.subject, text: pii.decrypt(a.body) }),
       signal: AbortSignal.timeout(8000)
     });
     const data = await r.json().catch(() => ({}));

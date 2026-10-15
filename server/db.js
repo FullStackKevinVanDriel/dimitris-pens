@@ -29,8 +29,8 @@ function uid(prefix) {
 
 // PII columns encrypted at rest (AES-256-GCM, see server/crypto.js).
 const PII_COLUMNS = {
-  orders: ["customer_name", "street", "city", "zip"],
-  shipping_alerts: ["body"]
+  orders: ["customer_name", "street", "city", "zip", "customer_email"],
+  shipping_alerts: ["body", "recipient"]
 };
 
 /* Encrypts legacy plaintext rows and re-encrypts rows written with a

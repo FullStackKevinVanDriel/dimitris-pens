@@ -10,7 +10,7 @@
  *   GET    /api/categories           (with product_count)
  *   POST   /api/orders/quote         {items, state, ship_method} -> server totals
  *   POST   /api/payments/mock        {amount_cents, currency?, card:{number,...}}
- *   POST   /api/orders               {items, address, ship_method?, payment_id}
+ *   POST   /api/orders               {items, address, email, ship_method?, payment_id}
  *   POST   /api/admin/login          {password}
  *   POST   /api/admin/logout
  *   GET    /api/admin/session        {admin: bool}
@@ -26,8 +26,9 @@
  *   DELETE /api/categories/:id
  *   GET    /api/alerts               (shipping alert outbox, latest first)
  *   POST   /api/alerts/:id/send      retry emailing a queued/failed alert
- *   GET    /api/orders               (latest 100, PII decrypted)
+ *   GET    /api/orders               ?status=&q= (latest 200, PII decrypted, with items)
  *   GET    /api/orders/:id           (by id or order_number, with items)
+ *   PUT    /api/orders/:id/status    {status, tracking_number?} paid→shipped|cancelled, shipped→delivered
  *
  * Money is integer cents. Tax + shipping are computed server-side from the
  * site settings and shipping address — client totals are never trusted, and
@@ -139,10 +140,15 @@ const PRODUCT_SELECT = `SELECT p.*, c.name AS category_name FROM products p
                         LEFT JOIN categories c ON c.id = p.category_id`;
 
 function decryptOrder(o) {
-  for (const c of ["customer_name", "street", "city", "zip"])
+  for (const c of ["customer_name", "street", "city", "zip", "customer_email"])
     o[c] = pii.decrypt(o[c]);
   return o;
 }
+
+const EMAIL_RE = /^[^\s@<>"]+@[^\s@<>".]+(\.[^\s@<>".]+)+$/;
+const shipTo = (o) => [`  ${o.customer_name}`, `  ${o.street}`, `  ${o.city}, ${o.state} ${o.zip}`];
+const itemLines = (items) => items.map((it) =>
+  `  ${it.qty}x ${it.product_name} @ ${cents(it.unit_price_cents)} = ${cents(it.qty * it.unit_price_cents)}`);
 
 function alertBody(o, items) {
   return [
@@ -160,9 +166,8 @@ function alertBody(o, items) {
     `Total charged:   ${cents(o.total_cents)}`,
     "",
     "Ship to:",
-    `  ${o.customer_name}`,
-    `  ${o.street}`,
-    `  ${o.city}, ${o.state} ${o.zip}`,
+    ...shipTo(o),
+    `  ${o.customer_email || "(no email)"}`,
     "",
     `Payment: ${o.payment_id || "n/a"} (mock/test mode)`,
     "",
@@ -170,25 +175,42 @@ function alertBody(o, items) {
   ].join("\n");
 }
 
-// Shipping alerts: paid orders queue their alert in shipping_alerts inside
-// the order transaction (so it can't be lost), then it's emailed through
-// Resend after commit (server/email.js). The body contains the customer's
-// address, so it's encrypted at rest. Admin Outbox shows status + retry.
-async function queueShippingAlert(client, order, items, recipient) {
-  const subject = `Shipping alert — order ${order.order_number}`;
+// Customer-facing emails (#30). Plain text, shop name + message from settings.
+function confirmationBody(o, items, s) {
+  return [
+    `Thank you for your order, ${o.customer_name}.`, "",
+    s.confirm_body, "",
+    `Order ${o.order_number}`, "",
+    ...itemLines(items), "",
+    `Subtotal:  ${cents(o.subtotal_cents)}`,
+    `Tax:       ${cents(o.tax_cents)}`,
+    `Shipping:  ${o.shipping_cents === 0 ? "FREE" : cents(o.shipping_cents)} (${o.ship_method})`,
+    `Total:     ${cents(o.total_cents)}`, "",
+    "Shipping to:", ...shipTo(o), "",
+    `-- ${s.shop_name}`
+  ].join("\n");
+}
+
+function shippedBody(o, s) {
+  return [
+    `Good news, ${o.customer_name}: order ${o.order_number} is on its way.`, "",
+    o.tracking_number ? `Tracking number: ${o.tracking_number}` : "Tracking: not provided.", "",
+    "Shipping to:", ...shipTo(o), "",
+    `-- ${s.shop_name}`
+  ].join("\n");
+}
+
+// Every email goes through the outbox table (shipping_alerts, `kind` says
+// which): queued inside the order transaction so it can't be lost, then
+// sent through Resend after commit (server/email.js). Recipient and body
+// can contain customer PII, so both are encrypted at rest. Admin Outbox
+// shows status + retry.
+async function queueEmail(client, { orderId, kind, recipient, subject, body }) {
   const id = uid("sa");
   await client.query(
-    `INSERT INTO shipping_alerts (id, order_id, recipient, subject, body, status)
-     VALUES ($1, $2, $3, $4, $5, 'queued')`,
-    [
-      id,
-      order.id,
-      recipient,
-      subject,
-      pii.encrypt(alertBody(order, items)),
-    ],
-  );
-  console.log("shipping alert queued for", order.order_number);
+    `INSERT INTO shipping_alerts (id, order_id, kind, recipient, subject, body, status)
+     VALUES ($1, $2, $3, $4, $5, $6, 'queued')`,
+    [id, orderId, kind, pii.encrypt(recipient), subject, pii.encrypt(body)]);
   return id;
 }
 
@@ -494,7 +516,7 @@ app.get(
      JOIN orders o ON o.id = sa.order_id
      ORDER BY sa.created_at DESC LIMIT 100`,
     );
-    res.json(rows.map((r) => ({ ...r, body: pii.decrypt(r.body) })));
+    res.json(rows.map((r) => ({ ...r, recipient: pii.decrypt(r.recipient), body: pii.decrypt(r.body) })));
   }),
 );
 
@@ -631,6 +653,9 @@ async function createOrder(input) {
   addr.state = addr.state.toUpperCase();
   if (!/^[A-Z]{2}$/.test(addr.state))
     throw httpError(422, "address.state must be a 2-letter code");
+  const customerEmail = String(input.email || a.email || "").trim().toLowerCase();
+  if (!EMAIL_RE.test(customerEmail) || customerEmail.length > 200)
+    throw httpError(422, "a valid email is required");
   const method = input.ship_method === "express" ? "express" : "standard";
   const paymentId = String(input.payment_id || "");
   if (!paymentId) throw httpError(402, "payment required");
@@ -667,8 +692,8 @@ async function createOrder(input) {
       `INSERT INTO orders
        (id, order_number, customer_name, street, city, state, zip,
         subtotal_cents, tax_cents, shipping_cents, total_cents,
-        ship_method, payment_id, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'paid') RETURNING *`,
+        ship_method, payment_id, status, customer_email)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'paid',$14) RETURNING *`,
       [
         id,
         order_number,
@@ -683,6 +708,7 @@ async function createOrder(input) {
         t.total_cents,
         method,
         paymentId,
+        pii.encrypt(customerEmail),
       ],
     );
     await client.query("UPDATE payments SET order_id = $1 WHERE id = $2", [
@@ -702,13 +728,18 @@ async function createOrder(input) {
         ],
       );
     }
-    // Queue the shipping alert in the same transaction; emailed after commit.
-    const alertId = await queueShippingAlert(
-      client,
-      decryptOrder(orows[0]),
-      lines,
-      s.alert_recipient,
-    );
+    // Queue the emails in the same transaction; sent after commit.
+    const o = decryptOrder(orows[0]);
+    const emailIds = [
+      await queueEmail(client, {
+        orderId: id, kind: "shipping_alert", recipient: s.alert_recipient,
+        subject: `Shipping alert — order ${order_number}`, body: alertBody(o, lines)
+      }),
+      await queueEmail(client, {
+        orderId: id, kind: "order_confirmation", recipient: customerEmail,
+        subject: `${s.shop_name} — order ${order_number} confirmed`, body: confirmationBody(o, lines, s)
+      })
+    ];
     await client.query("COMMIT");
 
     return {
@@ -722,8 +753,9 @@ async function createOrder(input) {
       ship_method: method,
       payment_id: paymentId,
       address: addr,
+      email: customerEmail,
       items: lines,
-      alertId,
+      emailIds,
     };
   } catch (e) {
     await client.query("ROLLBACK");
@@ -736,22 +768,43 @@ async function createOrder(input) {
 app.post(
   "/api/orders",
   wrap(async (req, res) => {
-    const { alertId, ...order } = await createOrder(req.body || {});
+    const { emailIds, ...order } = await createOrder(req.body || {});
     // Awaited so the serverless function doesn't freeze mid-send; never
-    // throws, and a failure only marks the alert for retry.
-    await email.deliverAlert(alertId);
+    // throws, and a failure only marks the email for retry.
+    for (const eid of emailIds) await email.deliverAlert(eid);
     res.status(201).json({ ok: true, order });
   }),
 );
 
+/* ---------------- orders admin (#29) ---------------- */
+const ORDER_STATUSES = ["paid", "shipped", "delivered", "cancelled"];
+// Allowed fulfillment moves. Cancelling is only for unshipped orders and
+// puts the items back in stock.
+const TRANSITIONS = { paid: ["shipped", "cancelled"], shipped: ["delivered"], delivered: [], cancelled: [] };
+
+async function attachItems(db, orders) {
+  if (!orders.length) return orders;
+  const { rows } = await db.query(
+    "SELECT order_id, product_id, product_name, qty, unit_price_cents FROM order_items WHERE order_id = ANY($1)",
+    [orders.map((o) => o.id)]);
+  for (const o of orders) o.items = rows.filter((r) => r.order_id === o.id).map(({ order_id, ...it }) => it);
+  return orders;
+}
+
+// GET /api/orders?status=paid&q=DP-AB  (newest first, max 200)
 app.get(
   "/api/orders",
   requireAdmin,
   wrap(async (req, res) => {
+    const status = String(req.query.status || "");
+    if (status && !ORDER_STATUSES.includes(status)) throw httpError(422, "unknown status");
+    const q = String(req.query.q || "").trim().toUpperCase().slice(0, 20);
     const { rows } = await pool.query(
-      "SELECT * FROM orders ORDER BY created_at DESC LIMIT 100",
-    );
-    res.json(rows.map(decryptOrder));
+      `SELECT * FROM orders
+       WHERE ($1 = '' OR status = $1) AND ($2 = '' OR order_number LIKE '%' || $2 || '%')
+       ORDER BY created_at DESC LIMIT 200`,
+      [status, q]);
+    res.json(await attachItems(pool, rows.map(decryptOrder)));
   }),
 );
 
@@ -760,17 +813,54 @@ app.get(
   requireAdmin,
   wrap(async (req, res) => {
     const { rows } = await pool.query(
-      "SELECT * FROM orders WHERE id = $1 OR order_number = $1",
-      [req.params.id],
-    );
+      "SELECT * FROM orders WHERE id = $1 OR order_number = $1", [req.params.id]);
     if (!rows.length) throw httpError(404, "not found");
-    const o = decryptOrder(rows[0]);
-    const { rows: items } = await pool.query(
-      "SELECT product_id, product_name, qty, unit_price_cents FROM order_items WHERE order_id = $1",
-      [o.id],
-    );
-    o.items = items;
-    res.json(o);
+    res.json((await attachItems(pool, [decryptOrder(rows[0])]))[0]);
+  }),
+);
+
+// PUT /api/orders/:id/status {status, tracking_number?}
+app.put(
+  "/api/orders/:id/status",
+  requireAdmin,
+  wrap(async (req, res) => {
+    const next = String((req.body || {}).status || "");
+    const tracking = String((req.body || {}).tracking_number || "").trim().slice(0, 100) || null;
+    if (!ORDER_STATUSES.includes(next)) throw httpError(422, "unknown status");
+    const s = await settings.getAll();
+    const client = await pool.connect();
+    let shippedEmailId = null, order;
+    try {
+      await client.query("BEGIN");
+      const { rows } = await client.query("SELECT * FROM orders WHERE id = $1 FOR UPDATE", [req.params.id]);
+      if (!rows.length) throw httpError(404, "not found");
+      const cur = rows[0];
+      if (!TRANSITIONS[cur.status].includes(next))
+        throw httpError(409, `can't change a ${cur.status} order to ${next}`);
+      if (next === "cancelled") {
+        await client.query(
+          `UPDATE products p SET inventory = p.inventory + oi.qty
+           FROM order_items oi WHERE oi.order_id = $1 AND oi.product_id = p.id`, [cur.id]);
+      }
+      const { rows: up } = await client.query(
+        `UPDATE orders SET status = $2,
+           tracking_number = CASE WHEN $2 = 'shipped' THEN $3 ELSE tracking_number END,
+           shipped_at   = CASE WHEN $2 = 'shipped'   THEN NOW() ELSE shipped_at END,
+           delivered_at = CASE WHEN $2 = 'delivered' THEN NOW() ELSE delivered_at END,
+           cancelled_at = CASE WHEN $2 = 'cancelled' THEN NOW() ELSE cancelled_at END
+         WHERE id = $1 RETURNING *`, [cur.id, next, tracking]);
+      order = decryptOrder(up[0]);
+      if (next === "shipped" && order.customer_email) {
+        shippedEmailId = await queueEmail(client, {
+          orderId: order.id, kind: "order_shipped", recipient: order.customer_email,
+          subject: `${s.shop_name} — order ${order.order_number} has shipped`, body: shippedBody(order, s)
+        });
+      }
+      await client.query("COMMIT");
+    } catch (e) { await client.query("ROLLBACK"); throw e; }
+    finally { client.release(); }
+    if (shippedEmailId) await email.deliverAlert(shippedEmailId);
+    res.json({ ok: true, order: (await attachItems(pool, [order]))[0] });
   }),
 );
 

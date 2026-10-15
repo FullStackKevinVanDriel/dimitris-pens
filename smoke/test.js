@@ -263,16 +263,19 @@ async function apiTests() {
   r = await api("POST", "/api/orders/quote", { items: orderItems, state: "WA", ship_method: "standard" }, 200);
   assert(r.data.total_cents === 48458, "quote total 48458");
   const buyer = { name: "Api Buyer", street: "1 Test Ln", city: "Olympia", state: "WA", zip: "98501" };
-  await api("POST", "/api/orders", { items: orderItems, address: buyer, payment_id: "pi_mock_forged" }, 402);
+  const buyerEmail = "api.buyer@example.com";
+  await api("POST", "/api/orders", { items: orderItems, address: buyer, email: "not-an-email", payment_id: "pi_mock_forged" }, 422);
+  assert(true, "invalid customer email -> 422");
+  await api("POST", "/api/orders", { items: orderItems, address: buyer, email: buyerEmail, payment_id: "pi_mock_forged" }, 402);
   assert(true, "forged payment id -> 402");
   r = await api("POST", "/api/payments/mock", { amount_cents: 100, card: { number: "4242424242424242" } }, 200);
-  await api("POST", "/api/orders", { items: orderItems, address: buyer, payment_id: r.data.id }, 409);
+  await api("POST", "/api/orders", { items: orderItems, address: buyer, email: buyerEmail, payment_id: r.data.id }, 409);
   assert(true, "underpaid order -> 409");
   r = await api("POST", "/api/payments/mock",
     { amount_cents: 48458, card: { number: "4242424242424242" } }, 200);
   const payId = r.data.id;
   r = await api("POST", "/api/orders", {
-    items: orderItems, address: buyer, ship_method: "standard", payment_id: payId
+    items: orderItems, address: buyer, email: buyerEmail, ship_method: "standard", payment_id: payId
   }, 201);
   const order = r.data.order;
   assert(/^DP-[A-Z0-9]{8}$/.test(order.order_number), "order number: " + order.order_number);
@@ -284,7 +287,7 @@ async function apiTests() {
   r = await api("GET", "/api/products", undefined, 200);
   assert(r.data.find((p) => p.id === "p1").inventory === 2, "p1 inventory 4 -> 2");
   assert(r.data.find((p) => p.id === "p4").inventory === 8, "p4 inventory 9 -> 8");
-  await api("POST", "/api/orders", { items: [{ product_id: "p6", qty: 1 }], address: buyer, payment_id: payId }, 409);
+  await api("POST", "/api/orders", { items: [{ product_id: "p6", qty: 1 }], address: buyer, email: buyerEmail, payment_id: payId }, 409);
   assert(true, "payment reuse -> 409");
 
   step("security: customer PII encrypted at rest");
@@ -294,7 +297,10 @@ async function apiTests() {
   for (const c of ["customer_name", "street", "city", "zip"])
     assert(raw[0][c].startsWith("enc:v1:") && !raw[0][c].includes(buyer[c === "customer_name" ? "name" : c]), c + " stored encrypted");
   const { rows: rawAlert } = await db.query("SELECT body FROM shipping_alerts WHERE order_id = $1", [order.id]);
-  assert(rawAlert[0].body.startsWith("enc:v1:") && !rawAlert[0].body.includes("Api Buyer"), "alert body stored encrypted");
+  assert(rawAlert.every((a) => a.body.startsWith("enc:v1:") && !a.body.includes("Api Buyer")), "email bodies stored encrypted");
+  assert(raw[0].customer_email.startsWith("enc:v1:") && !raw[0].customer_email.includes("example.com"), "customer_email stored encrypted");
+  const { rows: rawRcpt } = await db.query("SELECT recipient FROM shipping_alerts WHERE order_id = $1", [order.id]);
+  assert(rawRcpt.every((a) => a.recipient.startsWith("enc:v1:")), "email recipients stored encrypted");
   const { rows: tokens } = await db.query("SELECT token_hash FROM admin_sessions");
   assert(tokens.every((t) => !adminCookie.includes(t.token_hash)), "session token stored hashed only");
   await db.end();
@@ -302,7 +308,7 @@ async function apiTests() {
   step("api: insufficient stock -> 409, no partial decrement");
   r = await api("POST", "/api/orders", {
     items: [{ product_id: "p3", qty: 5 }], // p3 has 1
-    address: { name: "X", street: "Y", city: "Z", state: "OR", zip: "97000" },
+    address: { name: "X", street: "Y", city: "Z", state: "OR", zip: "97000" }, email: "x@example.com",
     ship_method: "standard", payment_id: "pi_mock_x"
   }, 409);
   assert(/insufficient stock/.test(r.data.error), "409 with stock message");
@@ -313,31 +319,40 @@ async function apiTests() {
   r = await api("GET", "/api/orders/" + order.order_number, undefined, 200);
   assert(r.data.items.length === 2, "order has 2 line items");
   assert(r.data.customer_name === "Api Buyer" && r.data.zip === "98501", "admin read decrypts PII");
+  assert(r.data.customer_email === buyerEmail, "admin read decrypts customer email");
   r = await api("GET", "/api/alerts", undefined, 200);
-  assert(r.data.length === 1 && r.data[0].order_id === order.id, "1 alert queued for the order");
-  assert(/Shipping alert/.test(r.data[0].subject), "alert subject correct");
-  assert(r.data[0].body.includes("Api Buyer"), "alert body decrypted for admin");
+  const shopAlert = r.data.find((a) => a.kind === "shipping_alert");
+  const custMail = r.data.find((a) => a.kind === "order_confirmation");
+  assert(r.data.length === 2 && shopAlert && custMail && r.data.every((a) => a.order_id === order.id),
+    "2 emails queued for the order: shipping alert + customer confirmation");
+  assert(/Shipping alert/.test(shopAlert.subject) && shopAlert.body.includes("Api Buyer") && shopAlert.body.includes(buyerEmail),
+    "shipping alert decrypted for admin, includes customer email");
+  assert(custMail.recipient === buyerEmail, "confirmation addressed to the customer (decrypted for admin)");
 
-  step("email: shipping alert sent through Resend");
-  const sentMail = fakeResend.emails[0];
-  assert(fakeResend.emails.length === 1 && !sentMail.failed, "1 email sent for the order");
+  step("email: shipping alert + confirmation sent through Resend");
+  assert(fakeResend.emails.length === 2 && fakeResend.emails.every((m) => !m.failed), "2 emails sent for the order");
+  const sentMail = fakeResend.emails.find((m) => m.headers["idempotency-key"] === "shipping-alert-" + shopAlert.id);
+  const sentConf = fakeResend.emails.find((m) => m.headers["idempotency-key"] === "shipping-alert-" + custMail.id);
+  assert(sentMail && sentConf, "each email sent with its own idempotency key");
   assert(sentMail.headers.authorization === "Bearer re_smoke_key", "API key sent as bearer token");
-  assert(sentMail.headers["idempotency-key"] === "shipping-alert-" + r.data[0].id, "idempotency key = alert id");
-  assert(sentMail.body.subject.includes(order.order_number) && sentMail.body.to[0] === r.data[0].recipient,
-    "subject has order number, sent to the alert recipient");
-  assert(sentMail.body.text.includes("Api Buyer") && sentMail.body.text.includes("1 Test Ln"), "email body has the ship-to address");
-  assert(r.data[0].status === "sent" && r.data[0].provider_id === "re_test_1" && r.data[0].sent_at, "alert marked sent with provider id");
+  assert(sentMail.body.subject.includes(order.order_number) && sentMail.body.to[0] === shopAlert.recipient,
+    "alert: subject has order number, sent to the shop's alert recipient");
+  assert(sentMail.body.text.includes("Api Buyer") && sentMail.body.text.includes("1 Test Ln"), "alert body has the ship-to address");
+  assert(sentConf.body.to[0] === buyerEmail && sentConf.body.subject.includes("confirmed") &&
+    sentConf.body.text.includes(order.order_number) && sentConf.body.text.includes("$484.58"),
+    "confirmation sent to the customer with order number + total");
+  assert(shopAlert.status === "sent" && shopAlert.provider_id && shopAlert.sent_at, "alert marked sent with provider id");
 
   step("email: provider outage doesn't block the order; retry from Outbox");
   fakeResend.failNext = true;
   const smallItems = [{ product_id: "p6", qty: 1 }];
   r = await api("POST", "/api/orders/quote", { items: smallItems, state: "WA" }, 200);
   const pay2 = (await api("POST", "/api/payments/mock", { amount_cents: r.data.total_cents, card: { number: "4242424242424242" } }, 200)).data.id;
-  r = await api("POST", "/api/orders", { items: smallItems, address: buyer, payment_id: pay2 }, 201);
+  r = await api("POST", "/api/orders", { items: smallItems, address: buyer, email: buyerEmail, payment_id: pay2 }, 201);
   const order2 = r.data.order;
   assert(true, "order " + order2.order_number + " created during email outage");
   r = await api("GET", "/api/alerts", undefined, 200);
-  const failedAlert = r.data.find((a) => a.order_id === order2.id);
+  const failedAlert = r.data.find((a) => a.order_id === order2.id && a.kind === "shipping_alert");
   assert(failedAlert.status === "failed" && /500/.test(failedAlert.last_error) && failedAlert.attempts === 1, "alert marked failed with error");
   await api("POST", "/api/alerts/" + failedAlert.id + "/send", {}, 401, { anon: true });
   r = await api("POST", "/api/alerts/" + failedAlert.id + "/send", {}, 200);
@@ -345,6 +360,31 @@ async function apiTests() {
   assert(fakeResend.emails.at(-1).headers["idempotency-key"] === "shipping-alert-" + failedAlert.id, "retry reuses the idempotency key");
   r = await api("GET", "/api/alerts", undefined, 200);
   assert(r.data.find((a) => a.id === failedAlert.id).attempts === 2, "attempts = 2");
+
+  step("orders admin: list, filter, ship, deliver, cancel + restock");
+  await api("GET", "/api/orders", undefined, 401, { anon: true });
+  await api("PUT", "/api/orders/" + order.id + "/status", { status: "shipped" }, 401, { anon: true });
+  r = await api("GET", "/api/orders?status=paid", undefined, 200);
+  assert(r.data.length === 2 && r.data.every((o) => o.status === "paid"), "2 paid orders to ship");
+  assert(r.data.find((o) => o.id === order.id).items.length === 2, "orders list includes line items");
+  r = await api("GET", "/api/orders?q=" + order.order_number.slice(3, 7).toLowerCase(), undefined, 200);
+  assert(r.data.some((o) => o.id === order.id), "search by partial order number");
+  await api("GET", "/api/orders?status=bogus", undefined, 422);
+  const mailsBefore = fakeResend.emails.length;
+  r = await api("PUT", "/api/orders/" + order.id + "/status", { status: "shipped", tracking_number: "1Z999AA10123456784" }, 200);
+  assert(r.data.order.status === "shipped" && r.data.order.tracking_number === "1Z999AA10123456784" && r.data.order.shipped_at,
+    "marked shipped with tracking number");
+  const shippedMail = fakeResend.emails[mailsBefore];
+  assert(fakeResend.emails.length === mailsBefore + 1 && shippedMail.body.to[0] === buyerEmail &&
+    shippedMail.body.text.includes("1Z999AA10123456784"), "shipped email sent to the customer with tracking");
+  await api("PUT", "/api/orders/" + order.id + "/status", { status: "cancelled" }, 409);
+  assert(true, "can't cancel a shipped order (409)");
+  r = await api("PUT", "/api/orders/" + order.id + "/status", { status: "delivered" }, 200);
+  assert(r.data.order.status === "delivered" && r.data.order.delivered_at, "marked delivered");
+  const p6Before = (await api("GET", "/api/products", undefined, 200)).data.find((p) => p.id === "p6").inventory;
+  r = await api("PUT", "/api/orders/" + order2.id + "/status", { status: "cancelled" }, 200);
+  const p6After = (await api("GET", "/api/products", undefined, 200)).data.find((p) => p.id === "p6").inventory;
+  assert(r.data.order.status === "cancelled" && p6After === p6Before + 1, "cancel puts items back in stock");
 
   step("api: delete test product");
   await api("DELETE", "/api/products/" + pid, undefined, 200);
@@ -355,6 +395,7 @@ async function apiTests() {
 /* ================= browser tests ================= */
 async function fillAddress(page) {
   await page.fill('#checkoutForm input[name="name"]', "Browser Buyer");
+  await page.fill('#checkoutForm input[name="email"]', "browser.buyer@example.com");
   await page.fill('#checkoutForm input[name="street"]', "2 Test Ave");
   await page.fill('#checkoutForm input[name="city"]', "Olympia");
   await page.selectOption("#stateSelect", "WA");
@@ -388,6 +429,9 @@ async function browserTests() {
   await page.locator('[data-add="p2"]').click();
   await page.locator('[data-add="p6"]').click();
   assert((await page.locator("#cartCount").textContent()) === "2", "cart badge 2");
+  await page.reload({ waitUntil: "networkidle" });
+  await page.locator(".card").first().waitFor();
+  assert((await page.locator("#cartCount").textContent()) === "2", "cart survives a page reload");
   await page.locator("#cartBtn").click();
   await page.locator("#checkoutBtn").click();
   await page.locator("#checkoutOverlay").waitFor();
@@ -400,6 +444,9 @@ async function browserTests() {
   const orderNo = (await page.locator(".order-no").textContent()).trim();
   assert(/^DP-[A-Z0-9]{8}$/.test(orderNo), "confirmation shows " + orderNo);
   await page.locator("#doneBtn").click();
+  await page.reload({ waitUntil: "networkidle" });
+  await page.locator(".card").first().waitFor();
+  assert((await page.locator("#cartCount").textContent()) === "0", "cart cleared after the order (also after reload)");
   const { data: prodAfter } = await api("GET", "/api/products", undefined, 200);
   assert(prodAfter.find((p) => p.id === "p2").inventory === 1, "p2 inventory 2 -> 1 (server-side)");
 
@@ -431,11 +478,24 @@ async function browserTests() {
 
   step("browser: admin outbox lists the alert");
   await page.locator("#outboxBtn").click();
-  await page.locator("#outboxList li", { hasText: orderNo }).waitFor();
-  assert(true, "outbox contains order " + orderNo);
+  await page.locator("#outboxList li", { hasText: orderNo }).first().waitFor();
+  assert((await page.locator("#outboxList li", { hasText: orderNo }).count()) === 2, "outbox: alert + confirmation for " + orderNo);
+  await page.locator("#closeOutboxBtn").click();
+
+  step("browser: admin orders page — ship an order");
+  await page.locator("#ordersBtn").click();
+  const orderRow = page.locator("#ordersList li", { hasText: orderNo });
+  await orderRow.waitFor();
+  assert((await orderRow.textContent()).includes("browser.buyer@example.com"), "order row shows customer + email");
+  await page.selectOption("#ordersStatus", "paid");
+  await orderRow.locator("[data-tracking]").fill("TRACK-BROWSER-1");
+  await orderRow.locator('[data-setstatus="shipped"]').click();
+  await page.selectOption("#ordersStatus", "shipped");
+  await page.locator("#ordersList li", { hasText: orderNo }).locator('.order-status[data-status="shipped"]').waitFor();
+  assert((await page.locator("#ordersList li", { hasText: orderNo }).textContent()).includes("TRACK-BROWSER-1"), "shipped with tracking via UI");
+  await page.locator("#closeOrdersBtn").click();
 
   step("browser: admin add/edit/price/rearrange/delete pen");
-  await page.locator("#closeOutboxBtn").click();
   await page.locator("#addPenBtn").click();
   await page.fill('#editorForm input[name="name"]', "Browser Pen");
   await page.fill('#editorForm input[name="price"]', "77.77");
@@ -493,6 +553,26 @@ async function browserTests() {
   await page.locator("#adminBar").waitFor({ state: "hidden" });
   const { status } = await api("GET", "/api/alerts", undefined, undefined, { anon: true });
   assert(status === 401, "logged out; admin API closed");
+
+  step("browser: admin toolbar on a phone");
+  const phone = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const pp = await phone.newPage();
+  pp.on("pageerror", (e) => pageErrors.push(e.message));
+  await pp.goto(BASE_URL + "/?admin=1", { waitUntil: "networkidle" });
+  await pp.fill("#loginPassword", ADMIN_PASSWORD);
+  await pp.locator("#loginBtn").click();
+  await pp.locator("#adminBar:not([hidden])").waitFor();
+  assert((await pp.locator("#adminBar").textContent()).includes("You're editing your shop"), "toolbar says you're editing the shop");
+  assert(await pp.locator("#adminMenuToggle").isVisible() && await pp.locator("#ordersBtn").isHidden(), "phone: tools folded into one button");
+  await pp.locator("#adminMenuToggle").click();
+  assert(await pp.locator("#ordersBtn").isVisible(), "phone: Admin tools opens the menu");
+  await pp.locator("#ordersBtn").click();
+  await pp.locator("#ordersOverlay:not([hidden])").waitFor();
+  assert(await pp.locator("#ordersBtn").isHidden(), "phone: picking a tool closes the menu");
+  await pp.evaluate(() => window.scrollTo(0, 2000));
+  const barTop = await pp.locator("#adminBar").evaluate((el) => el.getBoundingClientRect().top);
+  assert(barTop === 0, "toolbar stays pinned to the top while scrolling");
+  await phone.close();
 
   step("browser: no JS errors or CSP violations");
   assert(pageErrors.length === 0, "clean console" + (pageErrors.length ? ": " + pageErrors.join(" | ") : ""));
