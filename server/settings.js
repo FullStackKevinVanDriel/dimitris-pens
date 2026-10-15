@@ -202,14 +202,14 @@ const FIELDS = [
     group: "Theme",
     label: "Brass highlight",
     type: "color",
-    default: "#a67c3d",
+    default: "#86622c",
   },
   {
     key: "color_sold",
     group: "Theme",
     label: "Sold-out text",
     type: "color",
-    default: "#8a8474",
+    default: "#6b6658",
   },
   {
     key: "heading_font",

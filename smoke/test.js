@@ -44,6 +44,7 @@ const SECRETS = {
   PII_ENC_KEY: crypto.randomBytes(32).toString("base64"),
   COOKIE_SECURE: "false",
   RESEND_API_KEY: "re_smoke_key",
+  CRON_SECRET: "cron-smoke-secret",
   RESEND_API_URL: `http://localhost:${RESEND_PORT}/emails`
 };
 
@@ -386,6 +387,26 @@ async function apiTests() {
   const p6After = (await api("GET", "/api/products", undefined, 200)).data.find((p) => p.id === "p6").inventory;
   assert(r.data.order.status === "cancelled" && p6After === p6Before + 1, "cancel puts items back in stock");
 
+  step("housekeeping: favicon + daily cleanup job");
+  let fr = await fetch(BASE_URL + "/favicon.svg");
+  assert(fr.status === 200 && /svg/.test(fr.headers.get("content-type")), "favicon.svg served");
+  fr = await fetch(BASE_URL + "/favicon.ico", { redirect: "manual" });
+  assert(fr.status === 301 && fr.headers.get("location") === "/favicon.svg", "/favicon.ico redirects to the SVG");
+  const hk = new Client({ connectionString: testDbUrl() });
+  await hk.connect();
+  await hk.query("INSERT INTO admin_sessions (token_hash, expires_at) VALUES ('expired-test', NOW() - INTERVAL '1 hour')");
+  await hk.query("INSERT INTO login_failures (ip_hash, created_at) VALUES ('old-test', NOW() - INTERVAL '2 days')");
+  await api("GET", "/api/cron/cleanup", undefined, 401, { anon: true });
+  await api("GET", "/api/cron/cleanup", undefined, 401, { anon: true, headers: { Authorization: "Bearer wrong" } });
+  r = await api("GET", "/api/cron/cleanup", undefined, 200, { anon: true, headers: { Authorization: "Bearer cron-smoke-secret" } });
+  assert(r.data.removed.sessions >= 1 && r.data.removed.login_failures >= 1, "cron removes expired sessions + old login failures");
+  const { rows: left } = await hk.query(
+    "SELECT (SELECT COUNT(*)::int FROM admin_sessions WHERE token_hash = 'expired-test') + (SELECT COUNT(*)::int FROM login_failures WHERE ip_hash = 'old-test') AS n");
+  assert(left[0].n === 0, "rows actually deleted");
+  r = await api("GET", "/api/admin/session", undefined, 200);
+  assert(r.data.admin === true, "live admin session untouched");
+  await hk.end();
+
   step("api: delete test product");
   await api("DELETE", "/api/products/" + pid, undefined, 200);
   r = await api("GET", "/api/products", undefined, 200);
@@ -393,6 +414,19 @@ async function apiTests() {
 }
 
 /* ================= browser tests ================= */
+// axe-core accessibility scan. Injected with page.evaluate (not a <script>
+// tag) so the app's strict CSP doesn't block it. Fails on serious/critical.
+const AXE_SOURCE = require("fs").readFileSync(require.resolve("axe-core/axe.min.js"), "utf8");
+async function axeCheck(page, label) {
+  await page.evaluate(AXE_SOURCE);
+  const res = await page.evaluate(async () => {
+    const r = await window.axe.run(document, { resultTypes: ["violations"] });
+    return r.violations.filter((v) => v.impact === "serious" || v.impact === "critical")
+      .map((v) => v.id + " (" + v.nodes.length + "): " + v.nodes.slice(0, 2).map((n) => n.target.join(" ")).join(", "));
+  });
+  assert(res.length === 0, "axe: no serious/critical issues — " + label + (res.length ? " → " + res.join(" | ") : ""));
+}
+
 async function fillAddress(page) {
   await page.fill('#checkoutForm input[name="name"]', "Browser Buyer");
   await page.fill('#checkoutForm input[name="email"]', "browser.buyer@example.com");
@@ -424,6 +458,7 @@ async function browserTests() {
   await page.goto(BASE_URL, { waitUntil: "networkidle" });
   await page.locator(".card").first().waitFor({ timeout: 10000 });
   assert((await page.locator(".card").count()) === 7, "7 product cards");
+  await axeCheck(page, "shop page");
 
   step("browser: cart + checkout + mock pay");
   await page.locator('[data-add="p2"]').click();
@@ -435,6 +470,7 @@ async function browserTests() {
   await page.locator("#cartBtn").click();
   await page.locator("#checkoutBtn").click();
   await page.locator("#checkoutOverlay").waitFor();
+  await axeCheck(page, "checkout");
   await fillAddress(page);
   await page.locator("#toPaymentBtn").click();
   await page.locator("#payStep2:not([hidden])").waitFor();
@@ -463,6 +499,24 @@ async function browserTests() {
   await page.locator("#payError:not([hidden])").waitFor({ timeout: 20000 });
   assert(/declined/i.test(await page.locator("#payError").textContent()), "decline shown, order not created");
 
+  step("a11y: keyboard focus in dialogs");
+  await page.goto(BASE_URL, { waitUntil: "networkidle" });
+  await page.locator(".card").first().waitFor();
+  await page.locator("#cartBtn").focus();
+  await page.keyboard.press("Enter");
+  await page.locator("#cartDrawer:not([hidden])").waitFor();
+  await page.waitForTimeout(100);
+  assert(await page.evaluate(() => document.getElementById("cartDrawer").contains(document.activeElement)), "opening the cart moves focus into it");
+  for (let i = 0; i < 8; i++) await page.keyboard.press("Tab");
+  assert(await page.evaluate(() => document.getElementById("cartDrawer").contains(document.activeElement)), "Tab stays inside the open cart");
+  await page.keyboard.press("Escape");
+  await page.locator("#cartDrawer").waitFor({ state: "hidden" });
+  assert(await page.evaluate(() => document.activeElement.id) === "cartBtn", "closing returns focus to the Cart button");
+  await page.locator("[data-add]").first().click();
+  await page.waitForTimeout(150);
+  assert(/Added .+ to cart/.test(await page.locator("#srStatus").textContent()), "add-to-cart announced to screen readers");
+  assert((await page.locator(".card img, .card svg[role=img]").first().getAttribute("aria-label")) !== "Pen illustration", "pen images labelled with the pen name");
+
   step("browser: admin requires password");
   await page.goto(BASE_URL + "/?admin=1", { waitUntil: "networkidle" });
   await page.locator("#loginOverlay:not([hidden])").waitFor();
@@ -475,6 +529,7 @@ async function browserTests() {
   await page.locator("#loginBtn").click();
   await page.locator("#adminBar:not([hidden])").waitFor();
   assert(true, "logged in via UI");
+  await axeCheck(page, "admin mode");
 
   step("browser: admin outbox lists the alert");
   await page.locator("#outboxBtn").click();
@@ -536,10 +591,24 @@ async function browserTests() {
   await page.fill('#settingsForm input[name="shop_name"]', "Smoke Pens Co.");
   await page.fill('#settingsForm input[name="announcement"]', "Holiday orders ship Dec 20");
   await page.fill('#settingsForm textarea[name="about_body"]', "First paragraph.\n\nSecond paragraph.");
+  await page.locator('#settingsForm input[name="color_ink"]').fill("#eeeeee");
+  await page.locator('#settingsForm .contrast-warn').first().waitFor();
+  assert(/hard to read/.test(await page.locator("#settingsForm .contrast-warn").first().textContent()), "low-contrast text color warns");
+  await page.locator('#settingsForm input[name="color_ink"]').fill("#1b1814");
+  assert((await page.locator("#settingsForm .contrast-warn").count()) === 0, "warning clears when contrast is fixed");
+  await axeCheck(page, "Text & look dialog");
   await page.locator('#settingsForm input[name="color_accent"]').fill("#1f4e79");
   await page.locator("#saveSettingsBtn").click();
   await page.locator("#settingsOverlay").waitFor({ state: "hidden" });
   assert((await page.locator("#shopName").textContent()) === "Smoke Pens Co.", "shop name updated");
+  {
+    const sdb = new Client({ connectionString: testDbUrl() });
+    await sdb.connect();
+    const { rows } = await sdb.query("SELECT key FROM site_settings ORDER BY key");
+    await sdb.end();
+    const keys = rows.map((x) => x.key).join(",");
+    assert(keys === "about_body,announcement,color_accent,shop_name", "only changed settings saved (got " + keys + ")");
+  }
   assert((await page.locator("#announcement").textContent()) === "Holiday orders ship Dec 20", "announcement shown");
   assert((await page.locator("#aboutBody p").count()) === 2, "about split into 2 paragraphs");
   const accent = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--accent").trim());

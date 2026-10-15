@@ -36,7 +36,7 @@ const apiPut = (p, b) => api("PUT", p, b);
 const apiDel = (p) => api("DELETE", p);
 
 /* ---------------- SVG pen artwork (inline, no external images) ---------------- */
-function penSVG(style, accent) {
+function penSVG(style, accent, label) {
   accent = accent || "#6b2222";
   var ink = "#1b1814", brass = "#a67c3d";
   var tip = "";
@@ -51,7 +51,7 @@ function penSVG(style, accent) {
     tip = '<path d="M24 148 L36 148 L30 172 Z" fill="#d9b98a"/>' +
           '<path d="M28 162 L32 162 L30 172 Z" fill="' + ink + '"/>';
   }
-  return '<svg viewBox="0 0 60 190" role="img" aria-label="pen illustration">' +
+  return '<svg viewBox="0 0 60 190" role="img" aria-label="' + esc(label || "Pen illustration") + '">' +
     '<rect x="21" y="8" width="18" height="112" rx="9" fill="' + ink + '"/>' +
     '<rect x="21" y="8" width="18" height="34" rx="9" fill="' + accent + '"/>' +
     '<rect x="21" y="52" width="18" height="5" fill="' + brass + '"/>' +
@@ -71,9 +71,9 @@ var ICONS = {
 const SAFE_IMAGE = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+=*$/;
 function artFor(p) {
   if (p.image_data_url && SAFE_IMAGE.test(p.image_data_url))
-    return '<img src="' + esc(p.image_data_url) + '" alt="">';
+    return '<img src="' + esc(p.image_data_url) + '" alt="' + esc(p.name) + '">';
   var ic = ICONS[p.image_key] || ICONS.classic;
-  return penSVG(ic.style, ic.accent);
+  return penSVG(ic.style, ic.accent, p.name);
 }
 
 /* ---------------- state (in-memory) ---------------- */
@@ -85,6 +85,11 @@ let settings = {};  // public site settings (GET /api/settings)
 let settingsMeta = { fields: [], fonts: {} };
 let activeCat = null; // null = all categories
 
+function announce(msg) {
+  const el = document.getElementById("srStatus");
+  el.textContent = "";
+  setTimeout(() => { el.textContent = msg; }, 50); // re-announce identical messages
+}
 function prod(id) { return products.find((p) => p.id === id); }
 function money(cents) { return "$" + (cents / 100).toFixed(2); }
 function esc(s) {
@@ -106,7 +111,8 @@ function renderCats() {
   const nav = document.getElementById("categoryNav");
   const cats = [{ id: "", name: txt("all_label") || "All" }].concat(categories);
   nav.innerHTML = cats.map((c) =>
-    '<button data-cat="' + esc(c.id) + '"' + ((c.id || null) === activeCat ? ' class="active"' : "") + ">" + esc(c.name) + "</button>"
+    '<button data-cat="' + esc(c.id) + '" aria-pressed="' + ((c.id || null) === activeCat) + '"' +
+      ((c.id || null) === activeCat ? ' class="active"' : "") + ">" + esc(c.name) + "</button>"
   ).join("");
   nav.querySelectorAll("button").forEach((b) => {
     b.addEventListener("click", () => { activeCat = b.dataset.cat || null; renderCats(); renderGrid(); });
@@ -160,7 +166,7 @@ function adminControls(p) {
     '<button data-up="' + id + '" title="Show this pen earlier in the shop">&#8593; Move up</button>' +
     '<button data-down="' + id + '" title="Show this pen later in the shop">&#8595; Move down</button>' +
     '<button class="danger" data-del="' + id + '">Delete</button>' +
-    '<span class="price-edit">$<input data-pricein="' + id + '" value="' + (p.price_cents / 100).toFixed(2) + '">' +
+    '<span class="price-edit">$<input data-pricein="' + id + '" aria-label="Price for ' + esc(p.name) + '" value="' + (p.price_cents / 100).toFixed(2) + '">' +
     '<button data-priceset="' + id + '">Set</button></span>' +
   "</div>";
 }
@@ -249,6 +255,7 @@ function addToCart(id, qty) {
   }
   if (qty <= 0) return;
   if (line) line.qty += qty; else cart.push({ id, qty });
+  announce("Added " + p.name + " to cart. " + cartQty() + " item" + (cartQty() === 1 ? "" : "s") + " in cart.");
   renderCart(); renderGrid();
 }
 
@@ -800,8 +807,13 @@ function fieldInput(f, v) {
   }
 }
 
+// Values as loaded into the form, so Save only sends what was changed.
+// (Sending everything would pin every untouched field to today's default.)
+let settingsLoaded = {};
+
 async function openSettings() {
   const r = await apiGet("/admin/settings"); // includes private fields
+  settingsLoaded = r.values;
   const groups = {};
   r.fields.forEach((f) => { (groups[f.group] = groups[f.group] || []).push(f); });
   document.getElementById("settingsFields").innerHTML = Object.keys(groups).map((g) =>
@@ -811,6 +823,16 @@ async function openSettings() {
     "</fieldset>").join("");
   document.getElementById("settingsError").hidden = true;
   document.getElementById("settingsOverlay").hidden = false;
+  checkContrast();
+}
+
+// Order-independent compare (tax rates come back as an object whose key
+// order differs from the form's sorted text).
+function sameValue(a, b) {
+  const norm = (v) => (v && typeof v === "object" && !Array.isArray(v)
+    ? JSON.stringify(Object.keys(v).sort().map((k) => [k, v[k]]))
+    : JSON.stringify(v));
+  return norm(a) === norm(b);
 }
 
 function readSettingsForm() {
@@ -824,8 +846,43 @@ function readSettingsForm() {
     else if (f.type === "money") out[f.key] = Math.round(parseFloat(v) * 100);
     else if (f.type === "rates") out[f.key] = textToRates(v);
     else out[f.key] = v;
+    if (sameValue(out[f.key], settingsLoaded[f.key])) delete out[f.key];
   });
   return out;
+}
+
+/* WCAG contrast (#33): warn (don't block) when theme colors make text hard
+ * to read. Pairs: [text, background, minimum ratio, what it affects]. */
+const CONTRAST_PAIRS = [
+  ["color_ink", "color_paper", 4.5, "Body text on the background"],
+  ["color_ink_soft", "color_paper", 4.5, "Soft text on the background"],
+  ["color_paper", "color_accent", 4.5, "Button text on the accent color"],
+  ["color_accent", "color_paper", 3, "Accent on the background"]
+];
+function luminance(hex) {
+  const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+    .map((v) => (v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)));
+  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+}
+function contrast(a, b) {
+  const [x, y] = [luminance(a), luminance(b)].sort((m, n) => n - m);
+  return (x + 0.05) / (y + 0.05);
+}
+function checkContrast() {
+  const form = document.getElementById("settingsForm");
+  form.querySelectorAll(".contrast-warn").forEach((el) => el.remove());
+  CONTRAST_PAIRS.forEach(([fg, bg, min, what]) => {
+    const a = form.elements[fg], b = form.elements[bg];
+    if (!a || !b) return;
+    const r = contrast(a.value, b.value);
+    if (r < min) {
+      const warn = document.createElement("span");
+      warn.className = "contrast-warn";
+      warn.setAttribute("role", "status");
+      warn.textContent = what + " is hard to read (contrast " + r.toFixed(1) + ":1, aim for " + min + ":1).";
+      a.closest("label").appendChild(warn);
+    }
+  });
 }
 
 async function saveSettings(ev) {
@@ -914,6 +971,9 @@ document.getElementById("closeSettingsBtn").addEventListener("click", () => {
   document.getElementById("settingsOverlay").hidden = true;
 });
 document.getElementById("settingsForm").addEventListener("submit", saveSettings);
+document.getElementById("settingsForm").addEventListener("input", (e) => {
+  if (e.target.type === "color") checkContrast();
+});
 document.getElementById("resetThemeBtn").addEventListener("click", () => {
   resetTheme().catch((err) => alert("Reset failed: " + err.message));
 });
@@ -986,6 +1046,54 @@ document.addEventListener("keydown", (e) => {
       document.getElementById(id).hidden = true;
     });
   }
+});
+
+/* ---------------- dialogs: focus management (#33) ----------------
+ * Every popup (cart drawer + .modal-overlay) is opened/closed by toggling
+ * its `hidden` attribute, so one observer handles focus for all of them:
+ * on open, focus moves into the dialog; Tab cycles inside it; on close,
+ * focus returns to whatever opened it. Escape already closes them. */
+const DIALOG_IDS = ["cartDrawer", "checkoutOverlay", "editorOverlay", "catOverlay",
+  "outboxOverlay", "loginOverlay", "settingsOverlay", "ordersOverlay"];
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const openerOf = new Map();
+
+function visibleFocusables(root) {
+  return Array.from(root.querySelectorAll(FOCUSABLE)).filter((el) => el.offsetParent !== null || el === document.activeElement);
+}
+function topDialog() {
+  const open = DIALOG_IDS.map((id) => document.getElementById(id)).filter((el) => !el.hidden);
+  return open[open.length - 1] || null;
+}
+new MutationObserver((records) => {
+  records.forEach((r) => {
+    const el = r.target;
+    if (!el.hidden) {
+      if (!openerOf.has(el)) openerOf.set(el, document.activeElement);
+      // Wait a frame so the opener's own rendering (and autofocus) settles.
+      requestAnimationFrame(() => {
+        if (el.hidden || el.contains(document.activeElement)) return;
+        const first = visibleFocusables(el).find((f) => !f.classList.contains("icon-btn")) || visibleFocusables(el)[0];
+        if (first) first.focus();
+      });
+    } else {
+      const opener = openerOf.get(el);
+      openerOf.delete(el);
+      if (opener && document.contains(opener) && opener.offsetParent !== null && !topDialog()) opener.focus();
+    }
+  });
+}).observe(document.body, { attributes: true, attributeFilter: ["hidden"], subtree: true });
+
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Tab") return;
+  const dlg = topDialog();
+  if (!dlg) return;
+  const f = visibleFocusables(dlg);
+  if (!f.length) return;
+  const first = f[0], last = f[f.length - 1];
+  if (!dlg.contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+  else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
 });
 
 /* ---------------- init ---------------- */
