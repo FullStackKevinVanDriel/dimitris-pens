@@ -62,6 +62,21 @@ payment. See **docs/SECURITY.md** for the full review.
 **Plan and secrets setup: docs/DEPLOYMENT.md.** (Short version: Vercel *Pro*,
 because Hobby forbids commercial use, plus Neon, with secrets in Vercel env vars.)
 
+**How code reaches Vercel: GitHub Actions only.** Vercel's own Git deploys
+are off (`vercel.json` `git.deploymentEnabled: false`). After CI (the smoke
+test) passes on a push:
+
+| Branch | Workflow | Goes to |
+| --- | --- | --- |
+| `test` | Deploy preview (test) | Vercel Preview, at https://dimitris-pens-test.vercel.app |
+| `main` | Deploy production | https://dimitris-pens.vercel.app |
+
+Both can be run by hand (Actions -> the workflow -> Run workflow) to
+redeploy. They need the repo secrets `VERCEL_TOKEN`, `VERCEL_ORG_ID` and
+`VERCEL_PROJECT_ID`. Production builds run on Vercel with the project's env
+vars, so migrations still apply before the new version goes live; Preview
+shares the production database for now and skips migrations.
+
 - `api/index.js` exports the Express app for Vercel's Node runtime.
 - `vercel.json` rewrites **everything** to `/api` (one function serves the
   static frontend from `server/public` plus all `/api/*` routes). This keeps

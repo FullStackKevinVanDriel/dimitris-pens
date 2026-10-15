@@ -10,12 +10,15 @@ name: CI
 # PR started with zero jobs and showed as failed (#27).
 # Any other PR into main gets no smoke check and stays blocked; run this
 # workflow manually on its branch if that's ever really needed.
+#
+# Also on push to main: a passing run there is what triggers "Deploy
+# production" (and on test, "Deploy preview (test)").
 
 on:
   pull_request:
     branches: [test]
   push:
-    branches: [test]
+    branches: [test, main]
   workflow_dispatch:
 
 permissions:

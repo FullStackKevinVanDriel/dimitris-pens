@@ -1,0 +1,71 @@
+name: Deploy production
+
+# Deploys main to Vercel Production after CI passes on a push to main (the
+# merge of a test -> main promotion PR). Vercel builds it remotely with the
+# project's env vars, so `npm run vercel-build` still applies migrations
+# before the new version goes live. Run it by hand on main to redeploy.
+#
+# Vercel's own Git deploys are off (vercel.json git.deploymentEnabled).
+# workflow_run only fires from the copy of this file on the default branch.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  deployments: write
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  SITE: https://dimitris-pens.vercel.app
+  VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+jobs:
+  deploy:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: production
+      url: https://dimitris-pens.vercel.app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || 'main' }}
+
+      - name: Check Vercel secrets
+        run: |
+          for v in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID; do
+            [ -n "${!v}" ] || { echo "::error::Missing repo secret $v (Settings -> Secrets and variables -> Actions)"; exit 1; }
+          done
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Deploy to Vercel Production
+        id: deploy
+        run: |
+          npm install -g vercel@50 >/dev/null
+          url=$(vercel deploy --prod --yes --token "$VERCEL_TOKEN")
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "Deployed $(git rev-parse --short HEAD) to $url ($SITE)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Health check
+        run: |
+          for i in 1 2 3 4 5 6; do
+            curl -fsS "$SITE/api/health" && exit 0
+            sleep 10
+          done
+          echo "::error::$SITE/api/health did not return OK"; exit 1
