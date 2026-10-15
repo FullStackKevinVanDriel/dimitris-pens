@@ -68,8 +68,14 @@ because Hobby forbids commercial use, plus Neon, with secrets in Vercel env vars
 feature branch -> development (localhost) -> test (preview) -> main (production)
 ```
 
-- `development` is the default branch: open feature PRs into it (CI runs the
-  smoke test on each). It's what you run on localhost; it isn't deployed.
+- `development` is the default branch and what you run on localhost; it
+  isn't deployed. Every feature or fix starts from a freshly pulled
+  `development` on a `feature/<name>` or `fix/<name>` branch, is tested on
+  localhost (`npm run dev`) and with the Playwright smoke test
+  (`npm run smoke`), then goes up as a PR into `development`.
+- CI on each PR into `development`: `pr-rules` (the branch is `feature/` or
+  `fix/`, and the body closes an open issue with `Fixes #N`) and `smoke`. Both
+  must pass to merge.
 - Actions -> **Promote development to test** opens the development -> test PR.
   Merging it deploys the preview.
 - Actions -> **Promote test to production** opens the test -> main PR.
