@@ -1,4 +1,7 @@
 {
+  "git": {
+    "deploymentEnabled": false
+  },
   "outputDirectory": "server/public",
   "rewrites": [
     {

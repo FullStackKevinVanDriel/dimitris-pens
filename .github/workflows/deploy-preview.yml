@@ -1,0 +1,72 @@
+name: Deploy preview (test)
+
+# Deploys the test branch to a Vercel Preview after CI passes on a push to
+# test, and points https://dimitris-pens-test.vercel.app at it. Run it by
+# hand (Actions -> Run workflow) to redeploy a branch's head.
+#
+# Vercel's own Git deploys are off (vercel.json git.deploymentEnabled), so
+# this and "Deploy production" are the only way code reaches Vercel.
+# workflow_run only fires from the copy of this file on the default branch.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [test]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  deployments: write
+
+concurrency:
+  group: deploy-preview
+  cancel-in-progress: false
+
+env:
+  ALIAS: dimitris-pens-test.vercel.app
+  VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+jobs:
+  deploy:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: preview
+      url: https://dimitris-pens-test.vercel.app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+
+      - name: Check Vercel secrets
+        run: |
+          for v in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID; do
+            [ -n "${!v}" ] || { echo "::error::Missing repo secret $v (Settings -> Secrets and variables -> Actions)"; exit 1; }
+          done
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Deploy to Vercel Preview
+        id: deploy
+        run: |
+          npm install -g vercel@50 >/dev/null
+          url=$(vercel deploy --yes --token "$VERCEL_TOKEN")
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          vercel alias set "$url" "$ALIAS" --token "$VERCEL_TOKEN"
+          echo "Deployed $(git rev-parse --short HEAD) to $url (alias https://$ALIAS)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Health check
+        run: |
+          for i in 1 2 3 4 5 6; do
+            curl -fsS "https://$ALIAS/api/health" && exit 0
+            sleep 10
+          done
+          echo "::error::https://$ALIAS/api/health did not return OK"; exit 1
