@@ -108,6 +108,13 @@ Admin routes need the session cookie from `POST /api/admin/login`.
   `server/app.js` + `server/public/payments.js` mark the real-Stripe path:
   publishable key client-side, `POST /api/payments/intent` (secret key)
   returning `client_secret`, `stripe.confirmCardPayment()` on the client.
+- **Feedback** (admin -> Feedback, `server/feedback.js`): an admin describes
+  a fix or change; it's saved and opened as a GitHub issue on
+  `FEEDBACK_REPO` (labels `admin-feedback`, severity, type) using
+  `GITHUB_TOKEN`. The panel mirrors each issue's state (labels `in progress`
+  / `blocked`, closed as completed = done, not planned = resolved, sub-issue
+  counts) and says "All changes have been completed." when everything is
+  finished.
 - **Emails** (`server/email.js`, Resend): every order queues a shipping
   alert to the shop and a confirmation to the customer inside the order
   transaction; marking an order shipped queues a shipped notice. They're

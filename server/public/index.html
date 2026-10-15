@@ -27,6 +27,7 @@
     </button>
     <nav class="admin-tools" id="adminTools" aria-label="Admin tools">
       <button id="ordersBtn"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm-7 14H7v-2h5v2zm5-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>Orders <span class="admin-badge" id="ordersBadge" title="Orders waiting to ship" hidden></span></button>
+      <button id="feedbackBtn"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zm-7 12h-2v-2h2v2zm0-4h-2V6h2v4z"/></svg>Feedback <span class="admin-badge" id="feedbackBadge" title="Feedback items not finished yet" hidden></span></button>
       <button id="addPenBtn"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>Add a pen</button>
       <button id="manageCatsBtn"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z"/></svg>Categories</button>
       <button id="settingsBtn"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 0 0 0 18c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01a1.5 1.5 0 0 1 1.12-2.49H16a5 5 0 0 0 5-5c0-4.42-4.03-8-9-8zm-5.5 9a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3-4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3 4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg>Text &amp; look</button>
@@ -223,6 +224,46 @@
         <input id="ordersSearch" placeholder="Order number" aria-label="Search by order number">
       </div>
       <ul class="cat-list orders-list" id="ordersList"></ul>
+    </div>
+  </div>
+</div>
+
+<!-- Feedback to the developer (admin) -->
+<div class="modal-overlay" id="feedbackOverlay" hidden>
+  <div class="modal wide" role="dialog" aria-modal="true" aria-label="Feedback">
+    <div class="drawer-head">
+      <h2>Feedback</h2>
+      <button class="icon-btn" id="closeFeedbackBtn" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="feedback-summary" id="feedbackSummary" role="status"></div>
+      <form id="feedbackForm" class="feedback-form">
+        <h3>Report something to fix or change</h3>
+        <label>What should change? <input name="title" required maxlength="150" placeholder="e.g. The Pencils photo is blurry"></label>
+        <label>Details <textarea name="description" rows="3" maxlength="5000" placeholder="Where you saw it, what you expected"></textarea></label>
+        <div class="row">
+          <label>Type
+            <select name="category">
+              <option value="bug">Something's broken</option>
+              <option value="change" selected>Change something</option>
+              <option value="idea">New idea</option>
+              <option value="content">Text or photos</option>
+            </select>
+          </label>
+          <label>How urgent?
+            <select name="severity">
+              <option value="low">Whenever</option>
+              <option value="normal" selected>Normal</option>
+              <option value="high">Soon</option>
+              <option value="urgent">Urgent</option>
+            </select>
+          </label>
+        </div>
+        <div class="pay-error" id="feedbackError" role="alert" hidden></div>
+        <button type="submit" class="primary-btn" id="feedbackSubmit">Send feedback</button>
+      </form>
+      <h3>Your feedback</h3>
+      <ul class="cat-list feedback-list" id="feedbackList"></ul>
     </div>
   </div>
 </div>

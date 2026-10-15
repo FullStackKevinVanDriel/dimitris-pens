@@ -228,14 +228,15 @@ footer { text-align: center; padding: 0 20px 40px; color: var(--ink-soft); font-
 .fineprint a:hover { color: var(--ink-soft); }
 
 /* ---------- Cart drawer ---------- */
+/* Popups sit above the pinned admin toolbar (z-index 50) while open. */
 .drawer-overlay, .modal-overlay {
   position: fixed; inset: 0; background: rgba(27, 24, 20, 0.45);
-  z-index: 40;
+  z-index: 60;
 }
 .drawer {
   position: fixed; top: 0; right: 0; bottom: 0; width: min(380px, 92vw);
   background: var(--paper); border-left: 1px solid var(--ink);
-  z-index: 50; display: flex; flex-direction: column;
+  z-index: 70; display: flex; flex-direction: column;
 }
 .drawer-head {
   display: flex; align-items: center; justify-content: space-between;
@@ -438,3 +439,15 @@ footer { text-align: center; padding: 0 20px 40px; color: var(--ink-soft); font-
 .skip-link:focus { top: 8px; }
 :focus-visible { outline: 2px solid #1f6feb; outline-offset: 2px; }
 .contrast-warn { display: block; color: #9b1c1c; font-size: 12.5px; margin-top: 4px; }
+
+/* ---------- Admin feedback (#40) ---------- */
+.feedback-summary { padding: 10px 12px; margin-bottom: 14px; border: 1px solid var(--rule); font-size: 14px; }
+.feedback-summary.complete { border-color: #2d6a3a; background: #eef6ef; color: #1f4d29; font-weight: 600; }
+.feedback-form { border-bottom: 1px solid var(--rule); padding-bottom: 14px; margin-bottom: 14px; }
+.feedback-list li { display: block; }
+.fb-head { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; align-items: baseline; }
+.fb-status { text-transform: uppercase; font-size: 11px; letter-spacing: 0.1em; padding: 2px 8px; border: 1px solid var(--rule); white-space: nowrap; }
+.fb-status[data-status="done"], .fb-status[data-status="resolved"] { border-color: #2d6a3a; color: #1f4d29; }
+.fb-status[data-status="in_progress"] { border-color: var(--brass); color: var(--brass); }
+.fb-status[data-status="blocked"] { border-color: #9b1c1c; color: #9b1c1c; }
+.fb-meta { font-size: 12.5px; color: var(--ink-soft); }
