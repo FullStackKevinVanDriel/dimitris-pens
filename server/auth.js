@@ -130,6 +130,15 @@ async function login(req, res) {
   res.json({ ok: true });
 }
 
+/* Deletes expired sessions and failed-login records older than a day.
+ * Runs daily from Vercel Cron (GET /api/cron/cleanup) and opportunistically
+ * on successful logins. Returns the number of rows removed per table. */
+async function cleanup() {
+  const s = await pool.query("DELETE FROM admin_sessions WHERE expires_at < NOW()");
+  const f = await pool.query("DELETE FROM login_failures WHERE created_at < NOW() - INTERVAL '1 day'");
+  return { sessions: s.rowCount, login_failures: f.rowCount };
+}
+
 async function logout(req, res) {
   const token = readCookie(req, COOKIE);
   if (token)
@@ -144,4 +153,4 @@ async function session(req, res) {
   res.json({ admin: await sessionValid(req) });
 }
 
-module.exports = { requireAdmin, login, logout, session };
+module.exports = { requireAdmin, login, logout, session, cleanup };

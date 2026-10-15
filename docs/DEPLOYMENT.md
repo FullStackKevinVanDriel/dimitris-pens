@@ -27,6 +27,7 @@ Why Vercel and not something else:
 | `PII_ENC_KEY` | `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` | **Different key per environment.** Back up the Production key in a password manager |
 | `PII_ENC_KEYS_PREVIOUS` | only during key rotation | old key(s), comma-separated |
 | `ALERT_TO` | optional | initial alert email (also editable in admin) |
+| `CRON_SECRET` | random string (`openssl rand -hex 32`) | enables the daily cleanup job (expired admin sessions, old failed logins) |
 | `RESEND_API_KEY` | resend.com → API Keys (sending access) | optional; enables shipping-alert emails |
 | `RESEND_FROM` | optional | e.g. `Dimitris Pens <orders@yourdomain.com>` once the domain is verified in Resend; default `onboarding@resend.dev` only delivers to your own Resend account email |
 

@@ -4,9 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Dimitris Pens — Fine Writing Instruments</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+<a class="skip-link" href="#productGrid">Skip to the pens</a>
+<!-- Screen-reader announcements (e.g. "Added to cart"). -->
+<div class="sr-only" id="srStatus" role="status" aria-live="polite"></div>
 <!-- Admin toolbar: fixed to the top of the screen while logged in, styled
      apart from the shop theme so it's obvious you're in editing mode. -->
 <div class="admin-bar" id="adminBar" role="region" aria-label="Shop admin tools" hidden>
@@ -43,8 +47,8 @@
   <div class="masthead-rule"></div>
   <nav class="topnav">
     <div class="categories" id="categoryNav"></div>
-    <button class="cart-btn" id="cartBtn" aria-label="Open cart">
-      Cart <span class="cart-count" id="cartCount">0</span>
+    <button class="cart-btn" id="cartBtn" aria-haspopup="dialog" aria-controls="cartDrawer">
+      Cart <span class="cart-count" id="cartCount">0</span><span class="sr-only"> items, open cart</span>
     </button>
   </nav>
 </header>
@@ -53,7 +57,7 @@
 
 
 
-  <section class="grid" id="productGrid" aria-live="polite"></section>
+  <section class="grid" id="productGrid" aria-label="Pens" tabindex="-1"></section>
 
   <section class="about">
     <h2 id="aboutHeading">A note from the bench</h2>
@@ -72,7 +76,7 @@
 
 <!-- Cart drawer -->
 <div class="drawer-overlay" id="drawerOverlay" hidden></div>
-<aside class="drawer" id="cartDrawer" aria-label="Shopping cart" hidden>
+<aside class="drawer" id="cartDrawer" role="dialog" aria-modal="true" aria-label="Shopping cart" hidden>
   <div class="drawer-head">
     <h2>Your Cart</h2>
     <button class="icon-btn" id="closeCartBtn" aria-label="Close cart">&times;</button>
@@ -83,7 +87,7 @@
 
 <!-- Checkout modal -->
 <div class="modal-overlay" id="checkoutOverlay" hidden>
-  <div class="modal" role="dialog" aria-label="Checkout">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="Checkout">
     <div class="drawer-head">
       <h2>Checkout</h2>
       <button class="icon-btn" id="closeCheckoutBtn" aria-label="Close checkout">&times;</button>
@@ -120,27 +124,27 @@
             <label class="sl-field sl-full">Card number
               <input id="ccNum" inputmode="numeric" autocomplete="cc-number"
                      placeholder="4242 4242 4242 4242" maxlength="19">
-              <span class="field-err" id="errNum"></span>
+              <span class="field-err" aria-live="polite" id="errNum"></span>
             </label>
             <div class="sl-row">
               <label class="sl-field">Expiry
                 <input id="ccExp" inputmode="numeric" autocomplete="cc-exp"
                        placeholder="MM/YY" maxlength="5">
-                <span class="field-err" id="errExp"></span>
+                <span class="field-err" aria-live="polite" id="errExp"></span>
               </label>
               <label class="sl-field">CVC
                 <input id="ccCvc" inputmode="numeric" autocomplete="cc-csc"
                        placeholder="123" maxlength="4">
-                <span class="field-err" id="errCvc"></span>
+                <span class="field-err" aria-live="polite" id="errCvc"></span>
               </label>
             </div>
           </div>
           <label>Name on card <input id="ccName" autocomplete="cc-name">
-            <span class="field-err" id="errName"></span>
+            <span class="field-err" aria-live="polite" id="errName"></span>
           </label>
           <p class="hint">Demo cards: <strong>4242 4242 4242 4242</strong> succeeds ·
             any card ending <strong>0002</strong> simulates a decline.</p>
-          <div class="pay-error" id="payError" hidden></div>
+          <div class="pay-error" id="payError" role="alert" hidden></div>
           <div class="totals" id="payTotals"></div>
           <button type="submit" class="primary-btn" id="payBtn">Pay</button>
           <button type="button" class="ghost-btn" id="backToAddrBtn">Back to address</button>
@@ -157,7 +161,7 @@
 
 <!-- Product editor modal (admin) -->
 <div class="modal-overlay" id="editorOverlay" hidden>
-  <div class="modal" role="dialog" aria-label="Edit pen">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="Edit pen">
     <div class="drawer-head">
       <h2 id="editorTitle">Add pen</h2>
       <button class="icon-btn" id="closeEditorBtn" aria-label="Close editor">&times;</button>
@@ -185,7 +189,7 @@
 
 <!-- Category manager modal (admin) -->
 <div class="modal-overlay" id="catOverlay" hidden>
-  <div class="modal small" role="dialog" aria-label="Manage categories">
+  <div class="modal small" role="dialog" aria-modal="true" aria-label="Manage categories">
     <div class="drawer-head">
       <h2>Categories</h2>
       <button class="icon-btn" id="closeCatBtn" aria-label="Close">&times;</button>
@@ -202,7 +206,7 @@
 
 <!-- Orders (admin) -->
 <div class="modal-overlay" id="ordersOverlay" hidden>
-  <div class="modal wide" role="dialog" aria-label="Orders">
+  <div class="modal wide" role="dialog" aria-modal="true" aria-label="Orders">
     <div class="drawer-head">
       <h2>Orders</h2>
       <button class="icon-btn" id="closeOrdersBtn" aria-label="Close">&times;</button>
@@ -225,7 +229,7 @@
 
 <!-- Shipping alert outbox (admin) -->
 <div class="modal-overlay" id="outboxOverlay" hidden>
-  <div class="modal" role="dialog" aria-label="Shipping alert outbox">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="Emails">
     <div class="drawer-head">
       <h2>Emails</h2>
       <button class="icon-btn" id="closeOutboxBtn" aria-label="Close">&times;</button>
@@ -241,7 +245,7 @@
 
 <!-- Admin login -->
 <div class="modal-overlay" id="loginOverlay" hidden>
-  <div class="modal small" role="dialog" aria-label="Admin login">
+  <div class="modal small" role="dialog" aria-modal="true" aria-label="Admin login">
     <div class="drawer-head">
       <h2>Admin login</h2>
       <button class="icon-btn" id="closeLoginBtn" aria-label="Close">&times;</button>
@@ -249,7 +253,7 @@
     <div class="modal-body">
       <form id="loginForm">
         <label>Password <input type="password" name="password" id="loginPassword" required autocomplete="current-password"></label>
-        <div class="pay-error" id="loginError" hidden></div>
+        <div class="pay-error" id="loginError" role="alert" hidden></div>
         <button type="submit" class="primary-btn" id="loginBtn">Log in</button>
       </form>
     </div>
@@ -258,7 +262,7 @@
 
 <!-- Site settings (admin) -->
 <div class="modal-overlay" id="settingsOverlay" hidden>
-  <div class="modal" role="dialog" aria-label="Site settings">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="Text and look">
     <div class="drawer-head">
       <h2>Text &amp; look</h2>
       <button class="icon-btn" id="closeSettingsBtn" aria-label="Close">&times;</button>
@@ -266,7 +270,7 @@
     <div class="modal-body">
       <form id="settingsForm">
         <div id="settingsFields"></div>
-        <div class="pay-error" id="settingsError" hidden></div>
+        <div class="pay-error" id="settingsError" role="alert" hidden></div>
         <button type="submit" class="primary-btn" id="saveSettingsBtn">Save settings</button>
         <button type="button" class="ghost-btn" id="resetThemeBtn">Reset theme colors to default</button>
       </form>
