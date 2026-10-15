@@ -1,16 +1,19 @@
 name: CI
 
 # Runs migrations + the full smoke test (API + headless Chromium) against a
-# throwaway Postgres on every PR into test or main, and on every push to
-# test. The push run matters: promotion PRs (test → main) are opened by the
-# promote workflow with GITHUB_TOKEN, which can't trigger pull_request
-# workflows — but the PR's head commit is the pushed test commit, so the
-# push run's "smoke" check shows on the promotion PR and satisfies the
-# required check on main.
+# throwaway Postgres on every PR into test and on every push to test.
+#
+# Not on PRs into main: those are promotion PRs (test → main) whose head is
+# a test commit the push run already checked — its "smoke" check shows on
+# the promotion PR and satisfies main's required check. The promote
+# workflow opens them with GITHUB_TOKEN, and a pull_request run for such a
+# PR started with zero jobs and showed as failed (#27).
+# Any other PR into main gets no smoke check and stays blocked; run this
+# workflow manually on its branch if that's ever really needed.
 
 on:
   pull_request:
-    branches: [test, main]
+    branches: [test]
   push:
     branches: [test]
   workflow_dispatch:
