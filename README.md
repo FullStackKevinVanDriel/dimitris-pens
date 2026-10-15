@@ -62,6 +62,23 @@ payment. See **docs/SECURITY.md** for the full review.
 **Plan and secrets setup: docs/DEPLOYMENT.md.** (Short version: Vercel *Pro*,
 because Hobby forbids commercial use, plus Neon, with secrets in Vercel env vars.)
 
+**Branches.** Work flows through three branches:
+
+```
+feature branch -> development (localhost) -> test (preview) -> main (production)
+```
+
+- `development` is the default branch: open feature PRs into it (CI runs the
+  smoke test on each). It's what you run on localhost; it isn't deployed.
+- Actions -> **Promote development to test** opens the development -> test PR.
+  Merging it deploys the preview.
+- Actions -> **Promote test to production** opens the test -> main PR.
+  Merging it deploys production.
+- `development`, `test` and `main` are protected: changes go in by PR, and the
+  `smoke` check must pass.
+- `Fixes #N` in a feature PR closes the issue when it merges into
+  `development`.
+
 **How code reaches Vercel: GitHub Actions only.** Vercel's own Git deploys
 are off (`vercel.json` `git.deploymentEnabled: false`). After CI (the smoke
 test) passes on a push:

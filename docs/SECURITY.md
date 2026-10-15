@@ -27,7 +27,7 @@ Login is rate limited to 10 failures per IP per 15 minutes. The counter is store
 - **The live site at `dimitris-pens.vercel.app` runs v2.** Every hole in the table above is live there until v3 is deployed. If real orders have gone through it, treat that data as exposed.
 - **The repo is public.** No secrets are committed (verified), but a shop repo is usually better private.
 - ~~GitHub Pages was serving `main`~~ — disabled 2026-10-14.
-- **`main` has no branch protection.** Require PRs and the smoke test before merging.
+- ~~`main` has no branch protection~~: `development`, `test` and `main` require a PR and the `smoke` check.
 - **Payments are mocked.** The mock endpoint receives full card numbers. They are never stored or logged, but the real Stripe integration must use Stripe Elements so card data never touches this server (PCI SAQ-A). See the TODO in `server/app.js`.
 - Single shared admin password, no 2FA. Fine for one owner. Use per-user accounts or an IdP if more people need access.
 - Key loss: if `PII_ENC_KEY` is lost, encrypted customer data can't be recovered. Keep it in a password manager as well as in Vercel.
