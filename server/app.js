@@ -5,6 +5,7 @@
  *
  * Public:
  *   GET    /api/health
+ *   GET    /api/cron/cleanup         daily housekeeping (Bearer CRON_SECRET; Vercel Cron)
  *   GET    /api/settings             public storefront settings (+ field metadata)
  *   GET    /api/products             (sort_order; includes category_name)
  *   GET    /api/categories           (with product_count)
@@ -214,8 +215,28 @@ async function queueEmail(client, { orderId, kind, recipient, subject, body }) {
   return id;
 }
 
-/* ---------------- health ---------------- */
+/* ---------------- health, favicon, cron ---------------- */
 app.get("/api/health", (req, res) => res.json({ ok: true }));
+// Browsers still ask for /favicon.ico; the icon is SVG (public/favicon.svg).
+app.get("/favicon.ico", (req, res) => res.redirect(301, "/favicon.svg"));
+
+// Daily housekeeping (vercel.json "crons"). Vercel sends
+// "Authorization: Bearer $CRON_SECRET"; without the secret configured the
+// endpoint is disabled rather than open.
+app.get(
+  "/api/cron/cleanup",
+  wrap(async (req, res) => {
+    const secret = process.env.CRON_SECRET;
+    const got = String(req.headers.authorization || "");
+    const expected = "Bearer " + secret;
+    if (!secret || got.length !== expected.length ||
+        !require("crypto").timingSafeEqual(Buffer.from(got), Buffer.from(expected)))
+      throw httpError(401, "unauthorized");
+    const removed = await auth.cleanup();
+    console.log("cleanup:", JSON.stringify(removed));
+    res.json({ ok: true, removed });
+  }),
+);
 
 /* ---------------- admin auth ---------------- */
 app.post("/api/admin/login", wrap(auth.login));
