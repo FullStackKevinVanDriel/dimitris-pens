@@ -7,6 +7,31 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+<!-- Admin toolbar: fixed to the top of the screen while logged in, styled
+     apart from the shop theme so it's obvious you're in editing mode. -->
+<div class="admin-bar" id="adminBar" role="region" aria-label="Shop admin tools" hidden>
+  <div class="admin-bar-inner">
+    <div class="admin-id">
+      <svg class="admin-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zm17.71-10.21a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+      <div>
+        <strong class="admin-title">Admin mode</strong>
+        <span class="admin-sub">You're editing your shop. Customers don't see this bar.</span>
+      </div>
+    </div>
+    <button class="admin-menu-toggle" id="adminMenuToggle" aria-expanded="false" aria-controls="adminTools">
+      Admin tools <span class="admin-badge" id="ordersBadgeMobile" hidden></span>
+    </button>
+    <nav class="admin-tools" id="adminTools" aria-label="Admin tools">
+      <button id="ordersBtn"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm-7 14H7v-2h5v2zm5-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>Orders <span class="admin-badge" id="ordersBadge" title="Orders waiting to ship" hidden></span></button>
+      <button id="addPenBtn"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>Add a pen</button>
+      <button id="manageCatsBtn"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z"/></svg>Categories</button>
+      <button id="settingsBtn"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 0 0 0 18c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01a1.5 1.5 0 0 1 1.12-2.49H16a5 5 0 0 0 5-5c0-4.42-4.03-8-9-8zm-5.5 9a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3-4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3 4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg>Text &amp; look</button>
+      <button id="outboxBtn"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm0 4-8 5-8-5V6l8 5 8-5v2z"/></svg>Emails</button>
+      <button id="exitAdminBtn" class="admin-logout"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.09 15.59 11.5 17l5-5-5-5-1.41 1.41L12.67 11H3v2h9.67l-2.58 2.59zM19 3H5a2 2 0 0 0-2 2v4h2V5h14v14H5v-4H3v4a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z"/></svg>Log out</button>
+    </nav>
+  </div>
+</div>
+
 <div class="announcement" id="announcement" hidden></div>
 
 <header class="masthead">
@@ -25,15 +50,6 @@
 </header>
 
 <main>
-  <div class="admin-bar" id="adminBar" hidden>
-    <span class="admin-label">Admin mode</span>
-    <button id="addPenBtn">+ Add pen</button>
-    <button id="manageCatsBtn">Categories</button>
-    <button id="ordersBtn">Orders</button>
-    <button id="outboxBtn">Outbox</button>
-    <button id="settingsBtn">Site settings</button>
-    <button id="exitAdminBtn">Log out</button>
-  </div>
 
 
 
@@ -211,7 +227,7 @@
 <div class="modal-overlay" id="outboxOverlay" hidden>
   <div class="modal" role="dialog" aria-label="Shipping alert outbox">
     <div class="drawer-head">
-      <h2>Email outbox</h2>
+      <h2>Emails</h2>
       <button class="icon-btn" id="closeOutboxBtn" aria-label="Close">&times;</button>
     </div>
     <div class="modal-body">
@@ -244,7 +260,7 @@
 <div class="modal-overlay" id="settingsOverlay" hidden>
   <div class="modal" role="dialog" aria-label="Site settings">
     <div class="drawer-head">
-      <h2>Site settings</h2>
+      <h2>Text &amp; look</h2>
       <button class="icon-btn" id="closeSettingsBtn" aria-label="Close">&times;</button>
     </div>
     <div class="modal-body">

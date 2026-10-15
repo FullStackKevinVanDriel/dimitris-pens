@@ -92,21 +92,48 @@ body {
 /* ---------- Layout ---------- */
 main { max-width: 960px; margin: 0 auto; padding: 28px 20px 60px; }
 
+/* Admin toolbar — fixed colors (not the editable theme) so it always reads
+   as "tools", never as part of the storefront. */
 .admin-bar {
-  display: flex; align-items: center; gap: 10px;
-  background: var(--paper-deep);
-  border: 1px solid var(--rule);
-  padding: 10px 14px; margin-bottom: 22px;
+  position: sticky; top: 0; z-index: 50;
+  background: #14171c; color: #f4f1ea;
+  border-bottom: 3px solid #e0a43a;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
 }
-.admin-label {
-  font-size: 12px; letter-spacing: 0.2em; text-transform: uppercase;
-  color: var(--accent); font-weight: 700;
+.admin-bar-inner {
+  max-width: 1100px; margin: 0 auto; padding: 10px 16px;
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
 }
-.admin-bar button {
-  background: var(--paper); border: 1px solid var(--ink);
-  padding: 6px 12px; cursor: pointer; font-size: 13px;
+.admin-id { display: flex; align-items: center; gap: 10px; margin-right: auto; }
+.admin-icon { width: 26px; height: 26px; fill: #e0a43a; flex: none; }
+.admin-title { display: block; font-size: 15px; letter-spacing: 0.04em; color: #fff; }
+.admin-sub { display: block; font-size: 12.5px; color: #c9c4b8; }
+.admin-tools { display: flex; flex-wrap: wrap; gap: 8px; }
+.admin-tools button, .admin-menu-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: #262b33; color: #f4f1ea; border: 1px solid #3a414c; border-radius: 6px;
+  padding: 8px 12px; font-size: 14px; cursor: pointer; min-height: 40px;
 }
-.admin-bar button:hover { background: var(--ink); color: var(--paper); }
+.admin-tools button svg { width: 18px; height: 18px; fill: currentColor; flex: none; }
+.admin-tools button:hover, .admin-menu-toggle:hover { background: #333a45; border-color: #e0a43a; }
+.admin-tools button:focus-visible, .admin-menu-toggle:focus-visible { outline: 2px solid #e0a43a; outline-offset: 2px; }
+.admin-tools .admin-logout { background: transparent; }
+.admin-badge {
+  background: #e0a43a; color: #14171c; font-weight: 700; font-size: 12px;
+  border-radius: 999px; padding: 1px 7px; min-width: 20px; text-align: center;
+}
+.admin-menu-toggle { display: none; }
+
+/* Phones: name + one "Admin tools" button; tools open as a full-width grid. */
+@media (max-width: 720px) {
+  .admin-bar-inner { gap: 10px; flex-wrap: wrap; }
+  .admin-id { flex: 1; min-width: 0; }
+  .admin-sub { font-size: 12px; }
+  .admin-menu-toggle { display: inline-flex; }
+  .admin-tools { display: none; width: 100%; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .admin-bar.open .admin-tools { display: grid; }
+  .admin-tools button { justify-content: flex-start; min-height: 48px; font-size: 15px; }
+}
 
 /* ---------- Product grid ---------- */
 .grid {
@@ -165,16 +192,23 @@ main { max-width: 960px; margin: 0 auto; padding: 28px 20px 60px; }
 .stock-note.low { color: var(--accent); }
 
 /* admin card controls */
+/* Per-pen owner controls: clearly marked as admin-only. */
 .card-admin {
-  display: flex; flex-wrap: wrap; gap: 6px;
-  padding: 10px 16px 0;
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  margin: 12px 12px 12px; padding: 10px;
+  background: #14171c0d; border: 1px dashed #e0a43a; border-radius: 6px;
+}
+.card-admin-label {
+  width: 100%; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase;
+  color: #9a6a12; font-weight: 700;
 }
 .card-admin button {
-  background: none; border: 1px solid var(--rule); cursor: pointer;
-  font-size: 12px; padding: 4px 8px; color: var(--ink-soft);
+  background: #fff; border: 1px solid #c9c0a8; border-radius: 4px; cursor: pointer;
+  font-size: 13px; padding: 6px 10px; color: var(--ink); min-height: 34px;
 }
-.card-admin button:hover { border-color: var(--ink); color: var(--ink); }
-.card-admin button.danger:hover { border-color: var(--accent); color: var(--accent); }
+.card-admin button:hover { border-color: var(--ink); }
+.card-admin button.danger { color: #9b1c1c; }
+.card-admin button.danger:hover { border-color: #9b1c1c; }
 .price-edit { display: flex; gap: 6px; align-items: center; }
 .price-edit input { width: 70px; padding: 4px 6px; border: 1px solid var(--rule); font-size: 14px; }
 
@@ -392,3 +426,5 @@ footer { text-align: center; padding: 0 20px 40px; color: var(--ink-soft); font-
 .order-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .order-actions input { border: 1px solid var(--rule); padding: 6px 8px; font-size: 13px; }
 @media (max-width: 560px) { .order-detail { grid-template-columns: 1fr; } }
+
+.cart-btn { white-space: nowrap; }

@@ -554,6 +554,26 @@ async function browserTests() {
   const { status } = await api("GET", "/api/alerts", undefined, undefined, { anon: true });
   assert(status === 401, "logged out; admin API closed");
 
+  step("browser: admin toolbar on a phone");
+  const phone = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const pp = await phone.newPage();
+  pp.on("pageerror", (e) => pageErrors.push(e.message));
+  await pp.goto(BASE_URL + "/?admin=1", { waitUntil: "networkidle" });
+  await pp.fill("#loginPassword", ADMIN_PASSWORD);
+  await pp.locator("#loginBtn").click();
+  await pp.locator("#adminBar:not([hidden])").waitFor();
+  assert((await pp.locator("#adminBar").textContent()).includes("You're editing your shop"), "toolbar says you're editing the shop");
+  assert(await pp.locator("#adminMenuToggle").isVisible() && await pp.locator("#ordersBtn").isHidden(), "phone: tools folded into one button");
+  await pp.locator("#adminMenuToggle").click();
+  assert(await pp.locator("#ordersBtn").isVisible(), "phone: Admin tools opens the menu");
+  await pp.locator("#ordersBtn").click();
+  await pp.locator("#ordersOverlay:not([hidden])").waitFor();
+  assert(await pp.locator("#ordersBtn").isHidden(), "phone: picking a tool closes the menu");
+  await pp.evaluate(() => window.scrollTo(0, 2000));
+  const barTop = await pp.locator("#adminBar").evaluate((el) => el.getBoundingClientRect().top);
+  assert(barTop === 0, "toolbar stays pinned to the top while scrolling");
+  await phone.close();
+
   step("browser: no JS errors or CSP violations");
   assert(pageErrors.length === 0, "clean console" + (pageErrors.length ? ": " + pageErrors.join(" | ") : ""));
 

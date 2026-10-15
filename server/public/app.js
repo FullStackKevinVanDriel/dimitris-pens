@@ -129,8 +129,9 @@ function renderGrid() {
       ? '<span class="soldout">' + esc(txt("sold_out_label")) + "</span>"
       : '<span class="stock-note' + (p.inventory <= 2 ? " low" : "") + '">' +
         (p.inventory <= 2 ? "Only " + p.inventory + " left" : p.inventory + " in stock") + "</span>";
+    // Sold out is already shown in the price row; no second label here.
     const actionHtml = p.inventory <= 0
-      ? '<span class="soldout">' + esc(txt("sold_out_label")) + "</span>"
+      ? ""
       : '<button class="add-btn" data-add="' + esc(p.id) + '">' + esc(txt("add_to_cart_label")) + "</button>";
     card.innerHTML =
       '<div class="card-img">' + artFor(p) + "</div>" +
@@ -139,7 +140,7 @@ function renderGrid() {
         "<h3>" + esc(p.name) + "</h3>" +
         '<p class="card-desc">' + esc(p.description || "") + "</p>" +
         '<div class="card-row"><span class="price" data-price="' + esc(p.id) + '">' + money(p.price_cents) + "</span>" + stockHtml + "</div>" +
-        '<div class="card-row">' + actionHtml + "</div>" +
+        (actionHtml ? '<div class="card-row">' + actionHtml + "</div>" : "") +
       "</div>" +
       (admin ? adminControls(p) : "");
     grid.appendChild(card);
@@ -152,11 +153,12 @@ function renderGrid() {
 
 function adminControls(p) {
   const id = esc(p.id);
-  return '<div class="card-admin">' +
+  return '<div class="card-admin" aria-label="Admin controls for this pen">' +
+    '<span class="card-admin-label">Admin · edit this pen</span>' +
     '<button data-edit="' + id + '">Edit</button>' +
     '<button data-img="' + id + '">Picture</button>' +
-    '<button data-up="' + id + '" title="Move up">&#8593;</button>' +
-    '<button data-down="' + id + '" title="Move down">&#8595;</button>' +
+    '<button data-up="' + id + '" title="Show this pen earlier in the shop">&#8593; Move up</button>' +
+    '<button data-down="' + id + '" title="Show this pen later in the shop">&#8595; Move down</button>' +
     '<button class="danger" data-del="' + id + '">Delete</button>' +
     '<span class="price-edit">$<input data-pricein="' + id + '" value="' + (p.price_cents / 100).toFixed(2) + '">' +
     '<button data-priceset="' + id + '">Set</button></span>' +
@@ -645,6 +647,23 @@ async function renderOutbox() {
   }
 }
 
+/* Admin toolbar: "orders to ship" badge + phone menu toggle. */
+async function refreshOrdersBadge() {
+  if (!admin) return;
+  try {
+    const n = (await apiGet("/orders?status=paid")).length;
+    ["ordersBadge", "ordersBadgeMobile"].forEach((id) => {
+      const el = document.getElementById(id);
+      el.textContent = n;
+      el.hidden = n === 0;
+    });
+  } catch (e) { /* badge is optional */ }
+}
+function setAdminMenu(open) {
+  document.getElementById("adminBar").classList.toggle("open", open);
+  document.getElementById("adminMenuToggle").setAttribute("aria-expanded", String(open));
+}
+
 /* ---------------- admin: orders (#29) ---------------- */
 const NEXT_ACTIONS = {
   paid: [["shipped", "Mark shipped"], ["cancelled", "Cancel + restock"]],
@@ -695,7 +714,7 @@ async function renderOrders() {
             await apiPut("/orders/" + o.id + "/status", { status: st, tracking_number: tr ? tr.value.trim() : "" });
             if (st === "cancelled") { await refresh(); renderGrid(); }
           } catch (err) { alert("Update failed: " + err.message); }
-          renderOrders();
+          renderOrders(); refreshOrdersBadge();
         }));
       ul.appendChild(li);
     });
@@ -835,7 +854,7 @@ async function resetTheme() {
 }
 
 /* ---------------- admin login / logout ---------------- */
-function renderAll() { renderCats(); renderGrid(); renderCart(); }
+function renderAll() { renderCats(); renderGrid(); renderCart(); refreshOrdersBadge(); }
 
 function openLogin() {
   document.getElementById("loginError").hidden = true;
@@ -904,6 +923,13 @@ document.getElementById("addPenBtn").addEventListener("click", () => openEditor(
 document.getElementById("manageCatsBtn").addEventListener("click", () => {
   renderCatList();
   document.getElementById("catOverlay").hidden = false;
+});
+document.getElementById("adminMenuToggle").addEventListener("click", () => {
+  setAdminMenu(!document.getElementById("adminBar").classList.contains("open"));
+});
+// On phones, picking a tool closes the menu.
+document.getElementById("adminTools").addEventListener("click", (e) => {
+  if (e.target.closest("button")) setAdminMenu(false);
 });
 document.getElementById("ordersBtn").addEventListener("click", () => {
   renderOrders();
