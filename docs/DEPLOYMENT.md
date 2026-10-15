@@ -64,9 +64,11 @@ Changing the admin password: `npm run hash-password`, update
 ## Schema migrations
 
 Production builds run `npm run migrate` (see `scripts/vercel-build.js`)
-before the deployment goes live. Preview builds skip it until Preview has
-its own database: create a Neon branch for Preview, point Preview's
-`POSTGRES_URL` at it, then set `MIGRATE_ON_BUILD=true` for Preview.
+before the deployment goes live. Preview builds run it against Preview's own
+Neon branch (`preview` in project shy-forest-88762590), reached through the
+Preview-only `PREVIEW_POSTGRES_URL` / `PREVIEW_POSTGRES_URL_NON_POOLING`, with
+`MIGRATE_ON_BUILD=true` for Preview. They never migrate the production
+database (`server/db-url.js`).
 
 ## Before taking real money
 

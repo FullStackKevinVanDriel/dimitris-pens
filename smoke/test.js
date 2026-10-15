@@ -161,6 +161,46 @@ async function migrationTests() {
   await resetDb("dimitris_legacy"); // leave nothing behind
 }
 
+/* Preview deployments use their own database and never migrate production (#24). */
+async function previewDatabaseTests() {
+  step("preview database: previews never touch the production database (#24)");
+  const { appUrl, migrateUrl } = require("../server/db-url");
+  const prod = { POSTGRES_URL: "prod", POSTGRES_URL_NON_POOLING: "prod-direct" };
+  assert(appUrl({ ...prod, VERCEL_ENV: "production", PREVIEW_POSTGRES_URL: "prev" }) === "prod", "production ignores PREVIEW_ variables");
+  assert(appUrl({ ...prod, VERCEL_ENV: "preview", PREVIEW_POSTGRES_URL: "prev" }) === "prev", "preview app uses its own database");
+  assert(migrateUrl({ ...prod, VERCEL_ENV: "preview", PREVIEW_POSTGRES_URL: "prev", PREVIEW_POSTGRES_URL_NON_POOLING: "prev-direct" }) === "prev-direct",
+    "preview migrations use its own direct connection");
+  assert(migrateUrl({ ...prod, VERCEL_ENV: "preview" }) === null, "preview without its own database gets no migration URL");
+
+  // Run the real build step as a preview against local databases: the shared
+  // one stands in for production and must stay untouched.
+  const { execFileSync } = require("child_process");
+  const shared = dbUrl("dimitris_shared_check");
+  const own = dbUrl("dimitris_preview_check");
+  await resetDb("dimitris_shared_check");
+  await resetDb("dimitris_preview_check");
+  const build = (extra) => execFileSync("node", ["scripts/vercel-build.js"], {
+    cwd: require("path").join(__dirname, ".."),
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, VERCEL_ENV: "preview", MIGRATE_ON_BUILD: "true",
+      POSTGRES_URL: shared, POSTGRES_URL_NON_POOLING: shared, ...extra },
+    encoding: "utf8"
+  });
+  const tables = async (url) => {
+    const c = new Client({ connectionString: url });
+    await c.connect();
+    const { rows } = await c.query("SELECT to_regclass('public.pgmigrations') AS t");
+    await c.end();
+    return Boolean(rows[0].t);
+  };
+  let out = build({});
+  assert(/no database of its own/.test(out) && !(await tables(shared)), "preview without its own database skips migrations; shared database untouched");
+  out = build({ PREVIEW_POSTGRES_URL: own, PREVIEW_POSTGRES_URL_NON_POOLING: own });
+  assert(/migration\(s\) applied/.test(out) && (await tables(own)) && !(await tables(shared)),
+    "preview build migrates its own database only");
+  await resetDb("dimitris_shared_check");
+  await resetDb("dimitris_preview_check");
+}
+
 let serverProc = null;
 async function startServer() {
   const env = { ...process.env, ...SECRETS, POSTGRES_URL: testDbUrl(), PORT };
@@ -751,6 +791,7 @@ async function run() {
   startFakeResend();
   startFakeGitHub();
   await migrationTests();
+  await previewDatabaseTests();
   await startServer();
   try {
     await apiTests();

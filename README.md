@@ -36,8 +36,8 @@ npm run smoke                                # verify
 
 On Vercel, the build step (`npm run vercel-build`) applies pending
 migrations before a **Production** deploy goes live, and a failing migration
-fails the deploy. Preview builds skip migrations unless `MIGRATE_ON_BUILD=true`,
-because Preview shares the Production database for now (issue #15). Keep
+fails the deploy. Preview builds migrate their own database (see Preview
+database below) when `MIGRATE_ON_BUILD=true`, and never the production one. Keep
 migrations backward-compatible: the old deployment keeps serving while the
 new one migrates (add a column → deploy code that uses it → drop the old one later).
 
@@ -97,8 +97,16 @@ test) passes on a push:
 Both can be run by hand (Actions -> the workflow -> Run workflow) to
 redeploy. They need the repo secrets `VERCEL_TOKEN`, `VERCEL_ORG_ID` and
 `VERCEL_PROJECT_ID`. Production builds run on Vercel with the project's env
-vars, so migrations still apply before the new version goes live; Preview
-shares the production database for now and skips migrations.
+vars, so migrations still apply before the new version goes live.
+
+**Preview database.** Previews use their own Neon branch, `preview`, copied
+from production's data, so nothing a preview does touches the live shop. The
+app and migrations pick it through the Preview-only variables
+`PREVIEW_POSTGRES_URL` and `PREVIEW_POSTGRES_URL_NON_POOLING`
+(`server/db-url.js`). A preview without them falls back to the shared
+database with a warning, and its build never migrates it. To refresh the
+preview data from production: `neon branches reset preview --parent
+--project-id shy-forest-88762590`.
 
 - `api/index.js` exports the Express app for Vercel's Node runtime.
 - `vercel.json` rewrites **everything** to `/api` (one function serves the
