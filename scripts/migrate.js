@@ -5,7 +5,9 @@
  *   npm run migrate:create <name>      new migrations/<timestamp>_<name>.sql
  *
  * Reads POSTGRES_URL_NON_POOLING / DATABASE_URL_UNPOOLED when present (Vercel's
- * Neon integration sets them), else POSTGRES_URL / DATABASE_URL (and .env locally). Only the database
+ * Neon integration sets them), else POSTGRES_URL / DATABASE_URL (and .env locally).
+ * On a Vercel Preview it reads only PREVIEW_POSTGRES_URL_NON_POOLING / PREVIEW_POSTGRES_URL
+ * (server/db-url.js), so a preview never migrates the production database. Only the database
  * URL is needed — not the admin/PII secrets. History lives in the
  * `pgmigrations` table; node-pg-migrate holds an advisory lock so two runs
  * can't apply the same migration at once. Each migration runs in its own
@@ -33,8 +35,10 @@ async function migrate(direction = "up", opts = {}) {
   // Prefer the direct (non-pooled) URL: node-pg-migrate's session advisory
   // lock isn't reliable through Neon's PgBouncer pooler (transaction mode).
   const e = process.env;
-  const url = opts.databaseUrl || e.POSTGRES_URL_NON_POOLING || e.DATABASE_URL_UNPOOLED || e.POSTGRES_URL || e.DATABASE_URL;
-  if (!url) throw new Error("Missing POSTGRES_URL (or DATABASE_URL).");
+  const url = opts.databaseUrl || require("../server/db-url").migrateUrl(e);
+  if (!url) throw new Error(e.VERCEL_ENV === "preview"
+    ? "Preview has no PREVIEW_POSTGRES_URL_NON_POOLING / PREVIEW_POSTGRES_URL; refusing to migrate."
+    : "Missing POSTGRES_URL (or DATABASE_URL).");
   const { runner } = require("node-pg-migrate");
   return runner({
     databaseUrl: connection(url),
