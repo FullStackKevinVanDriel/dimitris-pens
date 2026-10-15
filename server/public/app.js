@@ -671,6 +671,86 @@ function setAdminMenu(open) {
   document.getElementById("adminMenuToggle").setAttribute("aria-expanded", String(open));
 }
 
+/* ---------------- admin: feedback -> GitHub issues (#40) ---------------- */
+const FB_STATUS = { open: "Open", in_progress: "In progress", blocked: "Blocked", resolved: "Resolved", done: "Done" };
+const FB_CATEGORY = { bug: "Something's broken", change: "Change", idea: "New idea", content: "Text or photos" };
+
+function setFeedbackBadge(summary) {
+  const el = document.getElementById("feedbackBadge");
+  const open = summary.total - summary.finished;
+  el.textContent = open;
+  el.hidden = open <= 0;
+}
+
+async function renderFeedback() {
+  const ul = document.getElementById("feedbackList");
+  const sum = document.getElementById("feedbackSummary");
+  ul.innerHTML = "<li>Loading…</li>";
+  try {
+    const r = await apiGet("/admin/feedback");
+    setFeedbackBadge(r.summary);
+    sum.classList.toggle("complete", r.summary.all_complete);
+    sum.textContent = !r.summary.total ? "No feedback yet."
+      : r.summary.all_complete ? "All changes have been completed."
+      : r.summary.finished + " of " + r.summary.total + " done.";
+    if (!r.github.configured) sum.textContent += " (Not connected to GitHub yet, so items are saved but not sent.)";
+    else if (r.github.sync_error) sum.textContent += " (Couldn't refresh from GitHub just now.)";
+    if (!r.items.length) { ul.innerHTML = ""; return; }
+    ul.innerHTML = "";
+    r.items.forEach((f) => {
+      const li = document.createElement("li");
+      li.dataset.feedback = f.id;
+      const progress = f.sub_total ? " · " + f.sub_done + " of " + f.sub_total + " tasks done" : "";
+      li.innerHTML =
+        '<div class="fb-head"><strong>' + esc(f.title) + "</strong>" +
+          '<span class="fb-status" data-status="' + esc(f.status) + '">' + esc(FB_STATUS[f.status] || f.status) + "</span></div>" +
+        '<div class="fb-meta">' + esc(FB_CATEGORY[f.category] || f.category) + " · " + esc(f.severity) + " · " +
+          esc(new Date(f.created_at).toLocaleDateString()) + esc(progress) +
+          (f.issue_url ? ' · <a href="' + esc(f.issue_url) + '" target="_blank" rel="noopener">issue #' + esc(f.issue_number) + "</a>"
+                       : " · not sent yet" + (f.last_error ? " (" + esc(f.last_error) + ")" : "") +
+                         ' <button data-fbsend="' + esc(f.id) + '">send now</button>') +
+        "</div>" +
+        (f.description ? '<p class="fb-meta">' + esc(f.description) + "</p>" : "");
+      ul.appendChild(li);
+    });
+    ul.querySelectorAll("[data-fbsend]").forEach((b) => b.addEventListener("click", async () => {
+      b.disabled = true;
+      try { await apiPost("/admin/feedback/" + b.dataset.fbsend + "/send", {}); }
+      catch (err) { alert("Not sent: " + err.message); }
+      renderFeedback();
+    }));
+  } catch (err) {
+    ul.innerHTML = "<li>Failed to load feedback: " + esc(err.message) + "</li>";
+  }
+}
+
+async function submitFeedback(ev) {
+  ev.preventDefault();
+  const f = ev.target;
+  const errBox = document.getElementById("feedbackError");
+  errBox.hidden = true;
+  document.getElementById("feedbackSubmit").disabled = true;
+  try {
+    const r = await apiPost("/admin/feedback", {
+      title: f.title.value.trim(), description: f.description.value.trim(),
+      category: f.category.value, severity: f.severity.value
+    });
+    f.reset();
+    announce(r.item.issue_number ? "Feedback sent as issue " + r.item.issue_number + "." : "Feedback saved.");
+    await renderFeedback();
+  } catch (err) {
+    errBox.textContent = err.message;
+    errBox.hidden = false;
+  } finally {
+    document.getElementById("feedbackSubmit").disabled = false;
+  }
+}
+
+async function refreshFeedbackBadge() {
+  if (!admin) return;
+  try { setFeedbackBadge((await apiGet("/admin/feedback")).summary); } catch (e) { /* optional */ }
+}
+
 /* ---------------- admin: orders (#29) ---------------- */
 const NEXT_ACTIONS = {
   paid: [["shipped", "Mark shipped"], ["cancelled", "Cancel + restock"]],
@@ -911,7 +991,7 @@ async function resetTheme() {
 }
 
 /* ---------------- admin login / logout ---------------- */
-function renderAll() { renderCats(); renderGrid(); renderCart(); refreshOrdersBadge(); }
+function renderAll() { renderCats(); renderGrid(); renderCart(); refreshOrdersBadge(); refreshFeedbackBadge(); }
 
 function openLogin() {
   document.getElementById("loginError").hidden = true;
@@ -991,6 +1071,14 @@ document.getElementById("adminMenuToggle").addEventListener("click", () => {
 document.getElementById("adminTools").addEventListener("click", (e) => {
   if (e.target.closest("button")) setAdminMenu(false);
 });
+document.getElementById("feedbackBtn").addEventListener("click", () => {
+  renderFeedback();
+  document.getElementById("feedbackOverlay").hidden = false;
+});
+document.getElementById("closeFeedbackBtn").addEventListener("click", () => {
+  document.getElementById("feedbackOverlay").hidden = true;
+});
+document.getElementById("feedbackForm").addEventListener("submit", submitFeedback);
 document.getElementById("ordersBtn").addEventListener("click", () => {
   renderOrders();
   document.getElementById("ordersOverlay").hidden = false;
@@ -1042,7 +1130,7 @@ document.getElementById("addCatForm").addEventListener("submit", async (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     closeCart();
-    ["checkoutOverlay", "editorOverlay", "catOverlay", "outboxOverlay", "loginOverlay", "settingsOverlay", "ordersOverlay"].forEach((id) => {
+    ["checkoutOverlay", "editorOverlay", "catOverlay", "outboxOverlay", "loginOverlay", "settingsOverlay", "ordersOverlay", "feedbackOverlay"].forEach((id) => {
       document.getElementById(id).hidden = true;
     });
   }
@@ -1054,7 +1142,7 @@ document.addEventListener("keydown", (e) => {
  * on open, focus moves into the dialog; Tab cycles inside it; on close,
  * focus returns to whatever opened it. Escape already closes them. */
 const DIALOG_IDS = ["cartDrawer", "checkoutOverlay", "editorOverlay", "catOverlay",
-  "outboxOverlay", "loginOverlay", "settingsOverlay", "ordersOverlay"];
+  "outboxOverlay", "loginOverlay", "settingsOverlay", "ordersOverlay", "feedbackOverlay"];
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 const openerOf = new Map();
 

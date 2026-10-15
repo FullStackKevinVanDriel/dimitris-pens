@@ -27,6 +27,9 @@
  *   DELETE /api/categories/:id
  *   GET    /api/alerts               (shipping alert outbox, latest first)
  *   POST   /api/alerts/:id/send      retry emailing a queued/failed alert
+ *   GET    /api/admin/feedback       feedback items + status from their GitHub issues
+ *   POST   /api/admin/feedback       {title, description?, category?, severity?} -> opens a GitHub issue
+ *   POST   /api/admin/feedback/:id/send  retry opening the issue
  *   GET    /api/orders               ?status=&q= (latest 200, PII decrypted, with items)
  *   GET    /api/orders/:id           (by id or order_number, with items)
  *   PUT    /api/orders/:id/status    {status, tracking_number?} paid→shipped|cancelled, shipped→delivered
@@ -54,6 +57,7 @@ const pii = require("./crypto");
 const auth = require("./auth");
 const settings = require("./settings");
 const email = require("./email");
+const feedback = require("./feedback");
 
 const app = express();
 // Client IP for login rate limiting. Vercel sets a trustworthy
@@ -538,6 +542,33 @@ app.get(
      ORDER BY sa.created_at DESC LIMIT 100`,
     );
     res.json(rows.map((r) => ({ ...r, recipient: pii.decrypt(r.recipient), body: pii.decrypt(r.body) })));
+  }),
+);
+
+/* ---------------- admin feedback -> GitHub issues (#40) ---------------- */
+app.get(
+  "/api/admin/feedback",
+  requireAdmin,
+  wrap(async (req, res) => {
+    res.json(await feedback.list());
+  }),
+);
+
+app.post(
+  "/api/admin/feedback",
+  requireAdmin,
+  wrap(async (req, res) => {
+    res.status(201).json({ ok: true, item: await feedback.create(req.body || {}) });
+  }),
+);
+
+app.post(
+  "/api/admin/feedback/:id/send",
+  requireAdmin,
+  wrap(async (req, res) => {
+    const item = await feedback.sendIssue(req.params.id);
+    if (!item) throw httpError(404, "not found");
+    res.json({ ok: Boolean(item.issue_number), item });
   }),
 );
 

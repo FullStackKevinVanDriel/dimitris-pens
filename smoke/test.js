@@ -39,13 +39,42 @@ function startFakeResend() {
   }).listen(RESEND_PORT);
 }
 
+// Fake GitHub Issues API for admin feedback (#40): POST creates an issue,
+// GET returns its current state; tests change state via fakeGitHub.issues.
+const GITHUB_PORT = 3198;
+const fakeGitHub = { issues: {}, created: [], failNext: false, server: null };
+function startFakeGitHub() {
+  fakeGitHub.server = require("http").createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => { body += c; });
+    req.on("end", () => {
+      const send = (code, obj) => { res.writeHead(code, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
+      if (fakeGitHub.failNext) { fakeGitHub.failNext = false; return send(502, { message: "simulated outage" }); }
+      const create = req.method === "POST" && /^\/repos\/[^/]+\/[^/]+\/issues$/.test(req.url);
+      const get = req.method === "GET" && req.url.match(/^\/repos\/[^/]+\/[^/]+\/issues\/(\d+)$/);
+      if (create) {
+        const n = 100 + fakeGitHub.created.length + 1;
+        const data = JSON.parse(body || "{}");
+        fakeGitHub.created.push({ number: n, headers: req.headers, url: req.url, data });
+        fakeGitHub.issues[n] = { number: n, state: "open", state_reason: null, labels: (data.labels || []).map((name) => ({ name })) };
+        return send(201, { number: n, html_url: "https://github.com/test/shop/issues/" + n });
+      }
+      if (get && fakeGitHub.issues[get[1]]) return send(200, fakeGitHub.issues[get[1]]);
+      send(404, { message: "Not Found" });
+    });
+  }).listen(GITHUB_PORT);
+}
+
 const SECRETS = {
   ADMIN_PASSWORD_HASH: hashPassword(ADMIN_PASSWORD),
   PII_ENC_KEY: crypto.randomBytes(32).toString("base64"),
   COOKIE_SECURE: "false",
   RESEND_API_KEY: "re_smoke_key",
   CRON_SECRET: "cron-smoke-secret",
-  RESEND_API_URL: `http://localhost:${RESEND_PORT}/emails`
+  RESEND_API_URL: `http://localhost:${RESEND_PORT}/emails`,
+  GITHUB_TOKEN: "gh_smoke_token",
+  GITHUB_API_URL: `http://localhost:${GITHUB_PORT}`,
+  FEEDBACK_REPO: "test/shop"
 };
 
 // Own port, so a dev server on :3001 doesn't get tested by mistake.
@@ -152,6 +181,7 @@ async function startServer() {
 function stopServer() {
   if (serverProc) serverProc.kill();
   if (fakeResend.server) fakeResend.server.close();
+  if (fakeGitHub.server) fakeGitHub.server.close();
 }
 
 /* ================= API tests ================= */
@@ -407,6 +437,45 @@ async function apiTests() {
   assert(r.data.admin === true, "live admin session untouched");
   await hk.end();
 
+  step("admin feedback: creates a GitHub issue, mirrors its status (#40)");
+  await api("GET", "/api/admin/feedback", undefined, 401, { anon: true });
+  await api("POST", "/api/admin/feedback", { title: "x" }, 401, { anon: true });
+  await api("POST", "/api/admin/feedback", { title: "  " }, 422);
+  r = await api("POST", "/api/admin/feedback",
+    { title: "Pencil photo is blurry", description: "On the Pencils tab", category: "content", severity: "high" }, 201);
+  const fb1 = r.data.item;
+  const sent = fakeGitHub.created[0];
+  assert(fb1.issue_number === 101 && /issues\/101$/.test(fb1.issue_url), "issue #101 created and linked");
+  assert(sent.headers.authorization === "Bearer gh_smoke_token" && sent.url === "/repos/test/shop/issues", "sent to FEEDBACK_REPO with the token");
+  assert(sent.data.title === "Pencil photo is blurry" && sent.data.body.includes(fb1.id) && sent.data.body.includes("On the Pencils tab"),
+    "issue title and body carry the feedback, tied back by item id");
+  assert(["admin-feedback", "severity:high", "content"].every((l) => sent.data.labels.includes(l)), "labels: admin-feedback, severity, category");
+  r = await api("GET", "/api/admin/feedback", undefined, 200);
+  assert(r.data.items[0].status === "open" && r.data.summary.total === 1 && r.data.summary.finished === 0 && !r.data.summary.all_complete,
+    "new item is open, 0 of 1 done");
+  const issue = fakeGitHub.issues[101];
+  issue.labels.push({ name: "in progress" });
+  assert((await api("GET", "/api/admin/feedback", undefined, 200)).data.items[0].status === "in_progress", "label 'in progress' -> in progress");
+  issue.labels.push({ name: "blocked" });
+  assert((await api("GET", "/api/admin/feedback", undefined, 200)).data.items[0].status === "blocked", "label 'blocked' -> blocked");
+  issue.sub_issues_summary = { total: 3, completed: 1, percent_completed: 33 };
+  r = await api("GET", "/api/admin/feedback", undefined, 200);
+  assert(r.data.items[0].sub_total === 3 && r.data.items[0].sub_done === 1, "sub-issue progress 1 of 3");
+
+  fakeGitHub.failNext = true;
+  r = await api("POST", "/api/admin/feedback", { title: "Add a gift-wrap option", category: "idea" }, 201);
+  const fb2 = r.data.item;
+  assert(!fb2.issue_number && /502/.test(fb2.last_error), "GitHub outage: item saved, error recorded, no issue yet");
+  r = await api("POST", "/api/admin/feedback/" + fb2.id + "/send", {}, 200);
+  assert(r.data.ok && r.data.item.issue_number === 102, "send now retries and links issue #102");
+
+  Object.assign(issue, { state: "closed", state_reason: "completed" });
+  Object.assign(fakeGitHub.issues[102], { state: "closed", state_reason: "not_planned" });
+  r = await api("GET", "/api/admin/feedback", undefined, 200);
+  const byId = Object.fromEntries(r.data.items.map((x) => [x.id, x]));
+  assert(byId[fb1.id].status === "done" && byId[fb2.id].status === "resolved", "closed completed -> done; closed not planned -> resolved");
+  assert(r.data.summary.all_complete && r.data.summary.finished === 2, "all items finished -> all_complete");
+
   step("api: delete test product");
   await api("DELETE", "/api/products/" + pid, undefined, 200);
   r = await api("GET", "/api/products", undefined, 200);
@@ -550,6 +619,30 @@ async function browserTests() {
   assert((await page.locator("#ordersList li", { hasText: orderNo }).textContent()).includes("TRACK-BROWSER-1"), "shipped with tracking via UI");
   await page.locator("#closeOrdersBtn").click();
 
+  step("browser: admin feedback panel (#40)");
+  await page.locator("#feedbackBtn").click();
+  await page.locator("#feedbackOverlay:not([hidden])").waitFor();
+  await page.locator("#feedbackSummary", { hasText: "All changes have been completed." }).waitFor();
+  assert(true, "earlier items all finished -> completion message");
+  await page.fill('#feedbackForm input[name="title"]', "Make the cart button bigger");
+  await page.fill('#feedbackForm textarea[name="description"]', "Hard to tap on my phone");
+  await page.selectOption('#feedbackForm select[name="severity"]', "urgent");
+  await page.locator("#feedbackSubmit").click();
+  const fbRow = page.locator("#feedbackList li", { hasText: "Make the cart button bigger" });
+  await fbRow.waitFor();
+  const newIssue = fakeGitHub.created.at(-1).number;
+  assert((await fbRow.textContent()).includes("issue #" + newIssue), "new item shows its issue number");
+  await page.locator("#feedbackSummary", { hasText: "2 of 3 done." }).waitFor();
+  assert(true, "summary drops to 2 of 3 done");
+  assert((await page.locator("#feedbackBadge").textContent()) === "1", "toolbar badge counts 1 unfinished item");
+  Object.assign(fakeGitHub.issues[newIssue], { state: "closed", state_reason: "completed" });
+  await page.locator("#closeFeedbackBtn").click();
+  await page.locator("#feedbackBtn").click();
+  await page.locator("#feedbackSummary", { hasText: "All changes have been completed." }).waitFor();
+  assert(await fbRow.locator('.fb-status[data-status="done"]').isVisible(), "closing the issue shows the item as done");
+  await axeCheck(page, "feedback panel");
+  await page.locator("#closeFeedbackBtn").click();
+
   step("browser: admin add/edit/price/rearrange/delete pen");
   await page.locator("#addPenBtn").click();
   await page.fill('#editorForm input[name="name"]', "Browser Pen");
@@ -656,6 +749,7 @@ async function run() {
   step("reset test database");
   await resetTestDb();
   startFakeResend();
+  startFakeGitHub();
   await migrationTests();
   await startServer();
   try {
