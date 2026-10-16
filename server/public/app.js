@@ -189,7 +189,7 @@ function wireAdminControls(grid) {
       const dir = b.hasAttribute("data-up") ? -1 : 1;
       moveProduct(b.dataset.up || b.dataset.down, dir);
     }));
-  grid.querySelectorAll("[data-drag]").forEach((h) => wireDrag(grid, h));
+  grid.querySelectorAll(".card").forEach((c) => { c.classList.add("draggable"); wireDrag(grid, c); });
   grid.querySelectorAll("[data-img]").forEach((b) =>
     b.addEventListener("click", () => quickImageChange(b.dataset.img)));
   grid.querySelectorAll("[data-priceset]").forEach((b) =>
@@ -241,9 +241,12 @@ async function moveProduct(id, dir) {
 // Pointer events cover mouse, pen and touch with one code path.
 const EDGE_PX = 80, EDGE_STEP_PX = 18, EDGE_TICK_MS = 30;
 let dragging = false;
+// A mouse can grab the whole card; touch only drags from the handle so the page still scrolls.
 function wireDrag(grid, handle) {
   handle.addEventListener("pointerdown", (e) => {
     if (e.button !== 0 || dragging) return;
+    const onHandle = e.target.closest("[data-drag]");
+    if (!onHandle && (e.pointerType !== "mouse" || e.target.closest("button, input, a, select, textarea, label"))) return;
     e.preventDefault();
     dragging = true;
     const pid = e.pointerId;

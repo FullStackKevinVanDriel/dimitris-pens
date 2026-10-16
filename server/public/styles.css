@@ -208,6 +208,8 @@ main { max-width: 960px; margin: 0 auto; padding: 28px 20px 60px; }
 }
 .card-admin button:hover { border-color: var(--ink); }
 .card-admin .drag-handle { cursor: grab; touch-action: none; user-select: none; }
+.card.draggable { cursor: grab; }
+.card.draggable button, .card.draggable input { cursor: auto; }
 .card.dragging { opacity: 0.6; outline: 2px dashed #e0a43a; outline-offset: 2px; }
 .card.dragging .drag-handle { cursor: grabbing; }
 .card-admin button.danger { color: #9b1c1c; }

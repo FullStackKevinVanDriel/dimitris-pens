@@ -730,6 +730,16 @@ async function browserTests() {
     assert((await saved).status() === status, "drag of " + from + " answered " + status);
     await page.waitForTimeout(300);
   };
+  const start0 = await names();
+  const body = await page.locator(".card", { has: page.locator("h3", { hasText: start0[2] }) }).locator(".card-img").boundingBox();
+  const head = await page.locator(".card", { has: page.locator("h3", { hasText: start0[0] }) }).boundingBox();
+  const savedBody = page.waitForResponse((r) => r.url().endsWith("/api/products/reorder"));
+  await page.mouse.move(body.x + body.width / 2, body.y + body.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(head.x + head.width / 2, head.y + head.height / 2, { steps: 8 });
+  await page.mouse.up();
+  assert((await savedBody).status() === 200 && (await names())[0] === start0[2], "mouse drag by grabbing the pen card itself");
+  await page.waitForTimeout(300);
   const start = await names();
   await dragPen(start[3], start[0]);
   const dragged = await names();
