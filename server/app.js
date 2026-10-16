@@ -343,15 +343,26 @@ app.put(
   requireAdmin,
   wrap(async (req, res) => {
     const order = (req.body || {}).order;
-    if (!Array.isArray(order))
+    if (!Array.isArray(order) || !order.every((id) => typeof id === "string"))
       throw httpError(422, "order must be an array of ids");
+    if (new Set(order).size !== order.length)
+      throw httpError(422, "order lists a pen more than once");
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
-      for (let i = 0; i < order.length; i++) {
+      // Pens missing from the list (a stale page) keep their order after it.
+      const { rows } = await client.query(
+        "SELECT id FROM products ORDER BY sort_order, name",
+      );
+      const listed = new Set(order);
+      const known = new Set(rows.map((r) => r.id));
+      const full = order
+        .filter((id) => known.has(id))
+        .concat(rows.map((r) => r.id).filter((id) => !listed.has(id)));
+      for (let i = 0; i < full.length; i++) {
         await client.query(
           "UPDATE products SET sort_order = $1 WHERE id = $2",
-          [i, String(order[i])],
+          [i, full[i]],
         );
       }
       await client.query("COMMIT");
