@@ -350,6 +350,8 @@ app.put(
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      // Lock every pen in id order first, so two saves at once queue instead of deadlocking.
+      await client.query("SELECT 1 FROM products ORDER BY id FOR UPDATE");
       // Pens missing from the list (a stale page) keep their order after it.
       const { rows } = await client.query(
         "SELECT id FROM products ORDER BY sort_order, name",

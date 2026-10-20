@@ -313,6 +313,11 @@ async function apiTests() {
   assert(partial[0] === ids[2] && partial[1] === ids[0] && partial.length === ids.length &&
     new Set(r.data.map((p) => p.sort_order)).size === ids.length,
     "partial list: listed pens first, the rest kept after with unique positions");
+  const shuffles = Array.from({ length: 12 }, (_, i) => ids.slice(i % ids.length).concat(ids.slice(0, i % ids.length)).reverse());
+  const burst = await Promise.all(shuffles.map((order) => api("PUT", "/api/products/reorder", { order })));
+  r = await api("GET", "/api/products", undefined, 200);
+  assert(burst.every((b) => b.status === 200) && new Set(r.data.map((p) => p.sort_order)).size === ids.length,
+    "12 saves at once all succeed: " + burst.map((b) => b.status).join(","));
   await api("PUT", "/api/products/reorder", { order: ids }, 200); // restore
 
   step("api: category CRUD + duplicate guard");
