@@ -131,6 +131,7 @@ function renderGrid() {
   list.forEach((p) => {
     const card = document.createElement("article");
     card.className = "card";
+    card.dataset.id = p.id;
     const stockHtml = p.inventory <= 0
       ? '<span class="soldout">' + esc(txt("sold_out_label")) + "</span>"
       : '<span class="stock-note' + (p.inventory <= 2 ? " low" : "") + '">' +
@@ -161,6 +162,7 @@ function adminControls(p) {
   const id = esc(p.id);
   return '<div class="card-admin" aria-label="Admin controls for this pen">' +
     '<span class="card-admin-label">Admin · edit this pen</span>' +
+    '<button class="drag-handle" data-drag="' + id + '" title="Drag to change where this pen shows in the shop" aria-label="Drag ' + esc(p.name) + ' to a new place. On a keyboard, use Move up and Move down.">&#10303; Drag</button>' +
     '<button data-edit="' + id + '">Edit</button>' +
     '<button data-img="' + id + '">Picture</button>' +
     '<button data-up="' + id + '" title="Show this pen earlier in the shop">&#8593; Move up</button>' +
@@ -187,6 +189,7 @@ function wireAdminControls(grid) {
       const dir = b.hasAttribute("data-up") ? -1 : 1;
       moveProduct(b.dataset.up || b.dataset.down, dir);
     }));
+  grid.querySelectorAll(".card").forEach((c) => { c.classList.add("draggable"); wireDrag(grid, c); });
   grid.querySelectorAll("[data-img]").forEach((b) =>
     b.addEventListener("click", () => quickImageChange(b.dataset.img)));
   grid.querySelectorAll("[data-priceset]").forEach((b) =>
@@ -200,13 +203,98 @@ function wireAdminControls(grid) {
     }));
 }
 
+function visibleIds() {
+  return products.filter((p) => !activeCat || p.category_id === activeCat).map((p) => p.id);
+}
+
+// The visible pens take the slots they held in the full list, so pens in
+// other categories keep their places.
+function mergeOrder(allIds, visible, newVisible) {
+  const shown = new Set(visible);
+  let k = 0;
+  return allIds.map((id) => (shown.has(id) ? newVisible[k++] : id));
+}
+
+async function saveVisibleOrder(newVisible) {
+  const all = products.map((p) => p.id);
+  const merged = mergeOrder(all, visibleIds(), newVisible);
+  let ok = true;
+  try {
+    if (merged.join() !== all.join()) await apiPut("/products/reorder", { order: merged });
+  } catch (e) {
+    ok = false;
+  }
+  await refresh(); renderGrid();
+  if (!ok) announce("The new order was not saved. Try again.");
+  return ok;
+}
+
 async function moveProduct(id, dir) {
-  const ids = products.map((p) => p.id);
+  const ids = visibleIds();
   const i = ids.indexOf(id), j = i + dir;
   if (i < 0 || j < 0 || j >= ids.length) return;
   const t = ids[i]; ids[i] = ids[j]; ids[j] = t;
-  await apiPut("/products/reorder", { order: ids });
-  await refresh(); renderGrid();
+  if (!(await saveVisibleOrder(ids)) || !prod(id)) return;
+  announce("Moved " + prod(id).name + " to place " + (j + 1) + " of " + ids.length + ".");
+}
+
+// Pointer events cover mouse, pen and touch with one code path.
+const EDGE_PX = 80, EDGE_STEP_PX = 18, EDGE_TICK_MS = 30;
+let dragging = false;
+// A mouse can grab the whole card; touch only drags from the handle so the page still scrolls.
+function wireDrag(grid, handle) {
+  handle.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || dragging) return;
+    const onHandle = e.target.closest("[data-drag]");
+    if (!onHandle && (e.pointerType !== "mouse" || e.target.closest("button, input, a, select, textarea, label"))) return;
+    e.preventDefault();
+    dragging = true;
+    const pid = e.pointerId;
+    const card = handle.closest(".card");
+    const before = Array.from(grid.querySelectorAll(".card")).map((c) => c.dataset.id).join();
+    card.classList.add("dragging");
+    let last = null, timer = null;
+    const place = () => {
+      const cards = Array.from(grid.children);
+      // By position, not hit test: the sticky admin bar can sit over the cards.
+      const over = cards.find((c) => {
+        const r = c.getBoundingClientRect();
+        return last.clientX >= r.left && last.clientX <= r.right && last.clientY >= r.top && last.clientY <= r.bottom;
+      });
+      if (!over || over === card) return;
+      grid.insertBefore(card, cards.indexOf(over) > cards.indexOf(card) ? over.nextSibling : over);
+    };
+    // Keep scrolling while the pointer rests near an edge (phone cards are taller than the screen).
+    const edgeScroll = () => {
+      const dy = last.clientY < EDGE_PX ? -EDGE_STEP_PX : last.clientY > window.innerHeight - EDGE_PX ? EDGE_STEP_PX : 0;
+      if (dy) { window.scrollBy(0, dy); place(); }
+    };
+    const move = (ev) => {
+      if (ev.pointerId !== pid) return;
+      // Firefox can lose the release when the card moves under the pointer; a buttonless move means it happened.
+      if (ev.pointerType === "mouse" && ev.buttons === 0) return end(ev);
+      last = ev; place();
+    };
+    timer = setInterval(() => last && edgeScroll(), EDGE_TICK_MS);
+    const end = async (ev) => {
+      if (ev.pointerId !== pid) return;
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", end);
+      document.removeEventListener("pointercancel", end);
+      clearInterval(timer);
+      card.classList.remove("dragging");
+      const after = Array.from(grid.querySelectorAll(".card")).map((c) => c.dataset.id);
+      if (ev.type === "pointercancel" || after.join() === before) { dragging = false; renderGrid(); return; }
+      const saved = await saveVisibleOrder(after);
+      dragging = false;
+      const p = prod(card.dataset.id);
+      if (saved && p) announce("Moved " + p.name + " to place " + (after.indexOf(p.id) + 1) + " of " + after.length + ".");
+    };
+    // On the document: moving the card in the page drops pointer capture.
+    document.addEventListener("pointermove", move);
+    document.addEventListener("pointerup", end);
+    document.addEventListener("pointercancel", end);
+  });
 }
 
 function quickImageChange(id) {
