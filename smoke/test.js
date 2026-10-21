@@ -744,8 +744,25 @@ async function browserTests() {
   await dragPen(start[3], start[0]);
   const dragged = await names();
   assert(dragged[0] === start[3] && dragged.length === start.length, "dropped first on All: " + dragged.slice(0, 4).join(", "));
+  assert((await page.locator("#srStatus").textContent()) === "Moved " + start[3] + " to place 1 of " + start.length + ".",
+    "drag announced to screen readers");
+  const lr = await names();
+  const lh = await page.locator(".card", { has: page.locator("h3", { hasText: lr[1] }) }).locator("[data-drag]").boundingBox();
+  const lt = await page.locator(".card", { has: page.locator("h3", { hasText: lr[0] }) }).boundingBox();
+  const savedLost = page.waitForResponse((r) => r.url().endsWith("/api/products/reorder"));
+  await page.mouse.move(lh.x + lh.width / 2, lh.y + lh.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(lt.x + lt.width / 2, lt.y + lt.height / 2, { steps: 8 });
+  // A move with no button held stands in for a release the browser never delivered.
+  await page.evaluate(([x, y]) => document.dispatchEvent(new PointerEvent("pointermove",
+    { pointerId: 1, pointerType: "mouse", buttons: 0, clientX: x, clientY: y, bubbles: true })), [lt.x + 5, lt.y + 5]);
+  assert((await savedLost).status() === 200 && (await names())[0] === lr[1] && (await page.locator(".card.dragging").count()) === 0,
+    "a missed mouse release still drops the pen on the next move");
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+  const beforeReload = await names();
   await page.reload({ waitUntil: "networkidle" });
-  assert((await names()).join() === dragged.join(), "order kept after reload");
+  assert((await names()).join() === beforeReload.join(), "order kept after reload");
   const pencils = () => page.locator("#productGrid .card", { has: page.locator(".card-cat", { hasText: "Pencils" }) }).locator("h3").allTextContents();
   const allBefore = await names();
   await page.locator('#categoryNav button[data-cat="c1"]').click();

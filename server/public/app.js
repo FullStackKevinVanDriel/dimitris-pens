@@ -269,7 +269,12 @@ function wireDrag(grid, handle) {
       const dy = last.clientY < EDGE_PX ? -EDGE_STEP_PX : last.clientY > window.innerHeight - EDGE_PX ? EDGE_STEP_PX : 0;
       if (dy) { window.scrollBy(0, dy); place(); }
     };
-    const move = (ev) => { if (ev.pointerId === pid) { last = ev; place(); } };
+    const move = (ev) => {
+      if (ev.pointerId !== pid) return;
+      // Firefox can lose the release when the card moves under the pointer; a buttonless move means it happened.
+      if (ev.pointerType === "mouse" && ev.buttons === 0) return end(ev);
+      last = ev; place();
+    };
     timer = setInterval(() => last && edgeScroll(), EDGE_TICK_MS);
     const end = async (ev) => {
       if (ev.pointerId !== pid) return;
