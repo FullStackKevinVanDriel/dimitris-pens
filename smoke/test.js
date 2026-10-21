@@ -304,6 +304,15 @@ async function apiTests() {
   await api("PUT", "/api/products/reorder", { order: rev }, 200);
   r = await api("GET", "/api/products", undefined, 200);
   assert(r.data[0].id === rev[0], "reorder applied");
+  await api("PUT", "/api/products/reorder", { order: [ids[0], ids[0]] }, 422);
+  await api("PUT", "/api/products/reorder", { order: [1, 2] }, 422);
+  assert(true, "duplicate or non-string ids rejected (422)");
+  await api("PUT", "/api/products/reorder", { order: [ids[2], "no-such-pen", ids[0]] }, 200);
+  r = await api("GET", "/api/products", undefined, 200);
+  const partial = r.data.map((p) => p.id);
+  assert(partial[0] === ids[2] && partial[1] === ids[0] && partial.length === ids.length &&
+    new Set(r.data.map((p) => p.sort_order)).size === ids.length,
+    "partial list: listed pens first, the rest kept after with unique positions");
   await api("PUT", "/api/products/reorder", { order: ids }, 200); // restore
 
   step("api: category CRUD + duplicate guard");
@@ -625,6 +634,7 @@ async function browserTests() {
   await page.waitForTimeout(150);
   assert(/Added .+ to cart/.test(await page.locator("#srStatus").textContent()), "add-to-cart announced to screen readers");
   assert((await page.locator(".card img, .card svg[role=img]").first().getAttribute("aria-label")) !== "Pen illustration", "pen images labelled with the pen name");
+  assert((await page.locator("[data-drag], [data-up]").count()) === 0, "shoppers see no reorder controls");
 
   step("browser: admin requires password");
   await page.goto(BASE_URL + "/?admin=1", { waitUntil: "networkidle" });
@@ -704,6 +714,91 @@ async function browserTests() {
   await page.locator(".card", { hasText: "Browser Pen" }).locator("[data-del]").click();
   await page.waitForTimeout(500);
   assert((await page.locator('.card h3', { hasText: "Browser Pen" }).count()) === 0, "pen deleted");
+
+  step("browser: admin drags pens to reorder them (#60)");
+  const viewport = page.viewportSize();
+  await page.setViewportSize({ width: 1400, height: 2400 }); // every card on screen
+  const names = () => page.locator("#productGrid .card h3").allTextContents();
+  const dragPen = async (from, to, status = 200) => {
+    const h = await page.locator(".card", { has: page.locator("h3", { hasText: from }) }).locator("[data-drag]").boundingBox();
+    const t = await page.locator(".card", { has: page.locator("h3", { hasText: to }) }).boundingBox();
+    const saved = page.waitForResponse((r) => r.url().endsWith("/api/products/reorder"));
+    await page.mouse.move(h.x + h.width / 2, h.y + h.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(t.x + t.width / 2, t.y + t.height / 2, { steps: 8 });
+    await page.mouse.up();
+    assert((await saved).status() === status, "drag of " + from + " answered " + status);
+    await page.waitForTimeout(300);
+  };
+  const start0 = await names();
+  const body = await page.locator(".card", { has: page.locator("h3", { hasText: start0[2] }) }).locator(".card-img").boundingBox();
+  const head = await page.locator(".card", { has: page.locator("h3", { hasText: start0[0] }) }).boundingBox();
+  const savedBody = page.waitForResponse((r) => r.url().endsWith("/api/products/reorder"));
+  await page.mouse.move(body.x + body.width / 2, body.y + body.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(head.x + head.width / 2, head.y + head.height / 2, { steps: 8 });
+  await page.mouse.up();
+  assert((await savedBody).status() === 200 && (await names())[0] === start0[2], "mouse drag by grabbing the pen card itself");
+  await page.waitForTimeout(300);
+  const start = await names();
+  await dragPen(start[3], start[0]);
+  const dragged = await names();
+  assert(dragged[0] === start[3] && dragged.length === start.length, "dropped first on All: " + dragged.slice(0, 4).join(", "));
+  await page.reload({ waitUntil: "networkidle" });
+  assert((await names()).join() === dragged.join(), "order kept after reload");
+  const pencils = () => page.locator("#productGrid .card", { has: page.locator(".card-cat", { hasText: "Pencils" }) }).locator("h3").allTextContents();
+  const allBefore = await names();
+  await page.locator('#categoryNav button[data-cat="c1"]').click();
+  const fountain = await names();
+  await dragPen(fountain[2], fountain[0]);
+  const fountainAfter = await names();
+  assert(fountainAfter[0] === fountain[2] && fountainAfter.length === fountain.length, "drag inside a category reorders it");
+  await page.locator('#categoryNav button[data-cat=""]').click();
+  const allAfter = await names();
+  const others = (list) => list.map((n, i) => (fountain.includes(n) ? "*" : n + "@" + i)).join();
+  assert(others(allAfter) === others(allBefore), "pens in other categories kept their places");
+  await page.locator('#categoryNav button[data-cat="c3"]').click();
+  const pencilBefore = await pencils();
+  await page.locator(".card", { has: page.locator("h3", { hasText: pencilBefore[1] }) }).locator("[data-up]").click();
+  await page.waitForTimeout(500);
+  assert((await pencils())[0] === pencilBefore[1], "Move up inside a category passes the next pen in it");
+  assert((await page.locator("#srStatus").textContent()) === "Moved " + pencilBefore[1] + " to place 1 of " + pencilBefore.length + ".",
+    "move announced to screen readers");
+  await page.locator('#categoryNav button[data-cat=""]').click();
+  await page.route("**/api/products/reorder", (r) => r.fulfill({ status: 500, body: "{}" }));
+  const beforeFail = await names();
+  await dragPen(beforeFail[1], beforeFail[0], 500);
+  await page.unroute("**/api/products/reorder");
+  assert((await names()).join() === beforeFail.join(), "failed save puts the grid back");
+  assert(/not saved/.test(await page.locator("#srStatus").textContent()), "failed save is announced");
+  await page.setViewportSize(viewport);
+
+  step("browser: phone - drag with a finger past the top of the screen (#60)");
+  const touchCtx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  const touchPage = await touchCtx.newPage();
+  touchPage.on("pageerror", (e) => pageErrors.push(e.message));
+  await touchPage.goto(BASE_URL + "/?admin=1", { waitUntil: "networkidle" });
+  await touchPage.fill("#loginPassword", ADMIN_PASSWORD);
+  await touchPage.locator("#loginBtn").click();
+  await touchPage.locator("#adminBar:not([hidden])").waitFor();
+  await touchPage.locator('#categoryNav button[data-cat="c1"]').click();
+  const phoneNames = () => touchPage.locator("#productGrid .card h3").allTextContents();
+  const pf = await phoneNames();
+  const handle = touchPage.locator(".card", { has: touchPage.locator("h3", { hasText: pf[1] }) }).locator("[data-drag]");
+  await handle.scrollIntoViewIfNeeded();
+  const hb = await handle.boundingBox();
+  const touch = await touchCtx.newCDPSession(touchPage);
+  const at = (y) => ({ touchPoints: [{ x: hb.x + hb.width / 2, y, id: 1 }] });
+  const savedPhone = touchPage.waitForResponse((r) => r.url().endsWith("/api/products/reorder"));
+  await touch.send("Input.dispatchTouchEvent", { type: "touchStart", ...at(hb.y + hb.height / 2) });
+  for (let i = 1; i <= 10; i++)
+    await touch.send("Input.dispatchTouchEvent", { type: "touchMove", ...at(hb.y + hb.height / 2 - (hb.y + hb.height / 2 - 40) * i / 10) });
+  await touchPage.waitForTimeout(2500); // finger rests at the top edge while the page scrolls
+  await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  assert((await savedPhone).status() === 200, "touch drag saved");
+  await touchPage.waitForTimeout(300);
+  assert((await phoneNames())[0] === pf[1], "finger drag moved " + pf[1] + " to the top");
+  await touchCtx.close();
 
   step("browser: admin category add/delete");
   await page.locator("#manageCatsBtn").click();
